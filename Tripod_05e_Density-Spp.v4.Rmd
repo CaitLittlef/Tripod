@@ -1,0 +1,921 @@
+---
+title: "Density-Spp"
+author: "CaitLittlef"
+date: "May 22, 2017"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+##### NOTES
+Must run Tripod_00_Main.R (and sourced codes therein) before proceeding!
+
+Some of my zeros are going to be there simply because those species were never going to be there (e.g., palm trees). But some will also be there not JUST for that "structural" reason but as a legitimate sampling result. So, don't just use hurdle (zero-truncated) which (I think) prevents zeros from being legit data points. Instead, use zero-inflated. Doing |1 says all zeros have same probability of belonging to zero component. (I think) one would use this in the absence of an explanation -- but I HAVE an explanation: seed dist. (N.b., above all per 180111 convo with stats consulting folks).
+
+Funny that, in using, stepAIC, sometimes I can still achieve an improved AIC value by dropping more variables (the least significant of what remains). Maybe there's some threshold of improvement.
+
+N.b., using bins b/c don't have measure to seed tree for some sites (basically ~ too far)
+
+N.b., my scaling may be a bit problematic with the distance bins -- but without scaling, get errors (compultationally singular). But with intervals, I'm basically dividing the values by 25m, so I'm maintaining their relative magnitude.
+
+N.b., could consider a mixed effects model with a random term set for the site, but because plots within the site are not my unit of analysis -- I'm already aggregating to site -- I'm not going to do so. Here's what I'd use, though:# # test with mixed model (has random term)
+<!-- # test = glmmPQL(psme_PA ~ dem100 -->
+<!-- #                + slp100 -->
+<!-- #                + hli100 -->
+<!-- #                + tpi100 -->
+<!-- #                + cti100 -->
+<!-- #                + shrub_perc -->
+<!-- #                + psme_dist_bin, -->
+<!-- #                random = ~1|site, -->
+<!-- #                data = PAdata, -->
+<!-- #                family = (binomial(link="logit")), -->
+<!-- #                maxit=100) -->
+<!-- # summary(test) -->
+
+### ZERO-INFLATED - ALBA - NOT RUNNING B/C ONLY AT 4 SITES & MODEL WOULDN'T CONVERGE (# COVARITES > # OBS)
+### ZERO-INFLATED - LAOC 
+```{r ZERO-INFLATED - LAOC}
+
+data <- laoc_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 20)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site back on
+data <- data[, c(8,9,1,2,3,4,5,6,7)] ; print(data) # re-order
+remove(var.scale)
+
+
+# Zero-inflated negative binomial
+
+library(pscl)
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb) ; AIC(model.zinb)
+
+# model.zinb.step <- stepAIC(model.zinb, direction="backward", scope = .~.^2)
+# StepAIC fails (computationally singular) maybe b/c # obs vs. # predictors?
+# So, running it on my own here, starting with dropping least signif covariates in model.zinb
+model.zinb1 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000) # no slp
+model.zinb2 <- zeroinfl(tpha ~ dem100 + slp100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000) # no hli
+model.zinb3 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000) # no cti
+AIC(model.zinb, model.zinb1, model.zinb2, model.zinb3) # keep #3, w/o cti
+
+# Iteratively drop slp100 or hli100
+model.zinb4 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+model.zinb5 <- zeroinfl(tpha ~ dem100 + slp100 + tpi100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+AIC(model.zinb3, model.zinb4, model.zinb5) # keep #5, w/o cti or hli
+
+# Try dropping slope, too
+model.zinb6 <- zeroinfl(tpha ~ dem100 + tpi100 + shrub_perc
+                       + laoc_dist_bin | laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+AIC(model.zinb5, model.zinb6) # ya, drop slope
+summary(model.zinb6) # all covariates are significant, so I'll stop there.
+model.zinb.step <- model.zinb6
+summary(model.zinb.step)
+remove(model.zinb, model.zinb1, model.zinb2, model.zinb3, model.zinb4, model.zinb5)
+(est.zinb.step <- cbind(Estimate = coef(model.zinb.step), confint(model.zinb.step)))
+
+
+# DIAGNOSTICS (R's defaults won't work -- maybe b/c 2 component model?)
+par(mfrow=c(1,1))
+# par(mfrow=c(1,3))
+plot(fitted(model.zinb.step), residuals(model.zinb.step))
+title("Residual vs. Fitted Value Plot")
+plot(data$tpha, residuals(model.zinb.step))
+title("Residuals vs. Observed Values Plot") 
+tiff(filename = "fit.v.obs_laoc.tif",
+     width = 4, height = 4, units = "in", res = 200)
+plot(data$tpha, fitted(model.zinb.step),
+     xlab = "observed values",
+     ylab = "fitted values")
+dev.off()
+# title("Fitted vs. Observed Values Plot") 
+# plot(data$laoc_dist_bin, residuals(model.zinb.step))
+# title("Residuals vs. Predictor")
+
+
+# *** Don says below is used for nested models not just vs. null
+# (prob b/c some terms will almost always be better than null?)
+# Likelihood ratio test to compare my model to null model.
+# Can use update() to re-fit a model, changing the formula.
+# I'm maintaining same structure of model, so keeping zero-infl component
+# But it looks as though that actually gets dropped, perhaps b/c ~1 is identical in both?
+# test <- zeroinfl(tpha ~ 1,
+#                        data = data,
+#                        dist = "negbin",
+#                        maxit=100)
+# test2 <- zeroinfl(tpha ~ 1 | 1,
+#                        data = data,
+#                        dist = "negbin",
+#                        maxit=100)
+# lmtest::lrtest(test, test2) # identical. 
+mod.null <- update(model.zinb.step, ~1)
+lmtest::lrtest(model.zinb.step, mod.null)
+
+    # Likelihood ratio test
+    # 
+    # Model 1: tpha ~ dem100 + tpi100 + shrub_perc + laoc_dist_bin | laoc_dist_bin
+    # Model 2: tpha ~ 1
+    #   #Df  LogLik Df  Chisq Pr(>Chisq)    
+    # 1   8 -77.369                         
+    # 2   3 -95.275 -5 35.812  1.036e-06 ***
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- laoc_sum_all$long
+data$lat <- laoc_sum_all$lat
+Moran_space(data, model.zinb.step$residuals)
+# Null is no SAC
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, resids=model.zinb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+# final model
+model.cnt.laoc <- model.zinb.step
+summary(model.cnt.laoc)
+(est.cnt.laoc <- cbind(Estimate = coef(model.cnt.laoc), confint(model.cnt.laoc)))
+```
+
+
+
+### ZERO-INFLATED - PICO
+```{r ZERO-INFLATED - PICO}
+
+data <- pico_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 21)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, air_seed=data.raw$site_air_seed) # add site, tpha, air back on
+data <- data[, c(8,9,1,2,3,4,5,6,7,10)] ; print(data) # re-order
+remove(var.scale)
+ 
+# model.nb <- glm.nb(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+#                    + pico_dist_bin,
+#                    data = data,
+#                    maxit = 100)
+# ^ Tried negative binomial, but won't converge -- jump right to zero-inflated.
+# Zero-inflated negative binomial proved legit b/c signif zero-inflation intercept.
+# I think that's a-ok -- even though the pico_dist_bin isn't significant.
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+summary(model.zinb) 
+model.zinb.step <- stepAIC(model.zinb, direction="backward") #, scope = .~.^2)
+summary(model.zinb.step) # But this has changed the zero part of the model, too.
+# Run my own step removal.
+
+model.zinb1 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb2 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+AIC(model.zinb, model.zinb1, model.zinb2) # keep #1 w/o slp
+summary(model.zinb1)
+model.zinb3 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+AIC(model.zinb, model.zinb1, model.zinb3) # keep #3 w/o slp or cti
+summary(model.zinb3) # try dropping dem or hli or both
+
+model.zinb4 <- zeroinfl(tpha ~ hli100 + tpi100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb5 <- zeroinfl(tpha ~ dem100 + tpi100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb6 <- zeroinfl(tpha ~ tpi100 + shrub_perc
+                       + pico_dist_bin + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+AIC(model.zinb3, model.zinb4, model.zinb5, model.zinb6) # keep #6 w/o slp, cti, dem, hli
+summary(model.zinb6) # try dropping pico_dist_bin then air_seed then both
+
+model.zinb7 <- zeroinfl(tpha ~ tpi100 + shrub_perc
+                       + air_seed | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb8 <- zeroinfl(tpha ~ tpi100 + shrub_perc
+                       + pico_dist_bin | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb9 <- zeroinfl(tpha ~ tpi100 + shrub_perc| pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+
+AIC(model.zinb6, model.zinb7, model.zinb8, model.zinb9) # suggests keeping pico_dist_bin
+model.zinb.step <- model.zinb6
+remove(model.zinb, model.zinb1, model.zinb2, model.zinb3, model.zinb4, model.zinb5, model.zinb6, model.zinb7, model.zinb8, model.zinb9)
+summary(model.zinb.step)
+
+
+# DIAGNOSTICS (R's defaults won't work -- maybe b/c 2 component model?)
+par(mfrow=c(1,1))
+# par(mfrow=c(1,3))
+plot(fitted(model.zinb.step), residuals(model.zinb.step))
+title("Residual vs. Fitted Value Plot")
+plot(data$tpha, residuals(model.zinb.step))
+title("Residuals vs. Observed Values Plot") 
+# tiff(filename = "fit.v.obs_pico.tif",
+#      width = 4, height = 4, units = "in", res = 200)
+plot(data$tpha, fitted(model.zinb.step),
+     xlab = "observed values",
+     ylab = "fitted values")
+dev.off()
+title("Fitted vs. Observed Values Plot") 
+# plot(data$laoc_dist_bin, residuals(model.zinb.step))
+# title("Residuals vs. Predictor")
+
+# Likelihood ratio test to compare my model to null model
+mod.null <- update(model.zinb.step, ~1)
+lmtest::lrtest(model.zinb.step, mod.null)
+
+    # Likelihood ratio test
+    # 
+    # Model 1: tpha ~ tpi100 + shrub_perc + pico_dist_bin + air_seed | pico_dist_bin
+    # Model 2: tpha ~ 1
+    #   #Df  LogLik Df  Chisq Pr(>Chisq)   
+    # 1   8 -422.33                        
+    # 2   3 -429.87 -5 15.094    0.00997 **
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- pico_sum_all$long
+data$lat <- pico_sum_all$lat
+Moran_space(data, model.zinb.step$residuals)
+# Null is no SAC -- there's very clearly SAC here
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, resids=model.zinb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+# final model
+model.cnt.pico <- model.zinb.step
+summary(model.cnt.pico)
+(est.cnt.pico <- cbind(Estimate = coef(model.cnt.pico), confint(model.cnt.pico)))
+
+# Model already shows signif of extant aerial seed bank -- no need to use tehse stats
+# # show diff btwn extant aerial seed bank and not
+# data$air_seed <- as.factor(data$air_seed)
+# mod.air <- lm(tpha ~ air_seed, data = data)
+# summary(mod.air)
+# anova(mod.air) # but data are clearly not normally distrubted (WAAAAAY more zeros)
+# hist(data$tpha)
+# 
+# # Use Kruskal Wallis test, which is non-parametric (based on ranks)
+# kruskal.test(tpha ~ air_seed, data = data)
+# # Yes, there's a significant diff.
+# dunn.test(x=data$tpha, g=data$air_seed, kw=TRUE)
+
+
+
+
+```
+
+
+
+### ZERO-INFLATED - PIEN
+```{r ZERO-INFLATED - PIEN}
+
+data <- pien_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 20)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site back on
+data <- data[, c(8,9,1,2,3,4,5,6,7)] ; print(data) # re-order
+remove(var.scale)
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pien_dist_bin | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+summary(model.zinb) 
+model.zinb.step <- stepAIC(model.zinb, direction="backward", scope = .~.^2)
+# (sometimes) StepAIC fails (computationally singular) maybe b/c # obs vs. # predictors?
+# So, running it on my own here, starting with dropping least signif covariates in model.zinb
+
+model.zinb1 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100
+                       + pien_dist_bin | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops shrub_perc
+
+model.zinb2 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + cti100 + shrub_perc
+                       + pien_dist_bin | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops tpi
+
+model.zinb3 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                        | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops pien_dist_bin
+
+model.zinb4 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + cti100 + shrub_perc
+                        | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops tpi & pien_dist_bin
+
+model.zinb5 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + cti100
+                        | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops tpi & pien_dist_bin & shrub_perc
+
+AIC(model.zinb, model.zinb1, model.zinb2, model.zinb3, model.zinb4, model.zinb5)
+# drop tpi, pien_dist_bin & shrub_perc
+model.zinb6 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 #+ cti100
+                        | pien_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops tpi & pien_dist_bin & shrub_perc
+AIC(model.zinb5, model.zinb6) # leave cti in.
+model.zinb.step <- model.zinb5
+summary(model.zinb.step)
+remove(model.zinb, model.zinb1, model.zinb2, model.zinb3, model.zinb4, model.zinb5, model.zinb6)
+(est.zinb.step <- cbind(Estimate = coef(model.zinb.step), confint(model.zinb.step)))
+
+
+# DIAGNOSTICS (R's defaults won't work -- maybe b/c 2 component model?)
+par(mfrow=c(1,1))
+par(mfrow=c(1,3))
+plot(fitted(model.zinb.step), residuals(model.zinb.step))
+title("Residual vs. Fitted Value Plot")
+plot(data$tpha, residuals(model.zinb.step))
+title("Residuals vs. Observed Values Plot") 
+# tiff(filename = "fit.v.obs_pien.tif",
+#      width = 4, height = 4, units = "in", res = 200)
+plot(data$tpha, fitted(model.zinb.step),
+     xlab = "observed values",
+     ylab = "fitted values")
+dev.off()
+title("Fitted vs. Observed Values Plot") 
+# plot(data$laoc_dist_bin, residuals(model.zinb.step))
+# title("Residuals vs. Predictor")
+
+
+
+# Likelihood ratio test to compare my model to null model
+mod.null <- update(model.zinb.step, ~1)
+lmtest::lrtest(model.zinb.step, mod.null)
+
+    # Likelihood ratio test
+    # 
+    # Model 1: tpha ~ dem100 + slp100 + hli100 + cti100 | pien_dist_bin
+    # Model 2: tpha ~ 1
+    #   #Df  LogLik Df Chisq Pr(>Chisq)    
+    # 1   8 -74.219                        
+    # 2   3 -86.649 -5 24.86  0.0001483 ***
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- psme_sum_all$long
+data$lat <- psme_sum_all$lat
+Moran_space(data, model.zinb.step$residuals)
+# Null is no SAC -- there's very clearly SAC here
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, resids=model.zinb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+# final model
+model.cnt.pien <- model.zinb.step
+summary(model.cnt.pien)
+(est.cnt.pien <- cbind(Estimate = coef(model.cnt.pien), confint(model.cnt.pien)))
+```
+
+
+
+### ZERO-INFLATED - PIPO
+```{r ZERO-INFLATED - PIPO}
+
+data <- pipo_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 20)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site back on
+data <- data[, c(8,9,1,2,3,4,5,6,7)] ; print(data) # re-order
+remove(var.scale)
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+summary(model.zinb) 
+model.zinb.step <- stepAIC(model.zinb, direction="backward", scope = .~.^2)
+summary(model.zinb.step) # But this has changed the zero part of the model, too.
+
+# Try iteratively nixing variables myself based on what's least significant
+model.zinb1 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100
+                       + pipo_dist_bin | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops shrub_perc
+model.zinb2 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops dist_bin
+model.zinb3 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops slope
+AIC(model.zinb, model.zinb1, model.zinb2, model.zinb3) # keep #1 w/o shrub_perc
+summary(model.zinb1) # nix slope or dist_bin, too, or both.
+
+model.zinb4 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + cti100 
+                       + pipo_dist_bin | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb5 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 
+                       | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb6 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 + cti100 
+                       | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+AIC(model.zinb1, model.zinb4, model.zinb5, model.zinb6) # keep #6 w/o slp or dist_bin
+summary(model.zinb6) # try nixing hli and cti and both
+
+model.zinb7 <- zeroinfl(tpha ~ dem100 + tpi100 + cti100 | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb8 <- zeroinfl(tpha ~ dem100 + hli100 + tpi100 | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+model.zinb9 <- zeroinfl(tpha ~ dem100 + tpi100 | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+AIC(model.zinb6, model.zinb7, model.zinb8, model.zinb9) # drop hli & cti.
+model.zinb.step <- model.zinb9
+summary(model.zinb.step)
+str(model.zinb.step)
+
+remove(model.zinb, model.zinb1, model.zinb2, model.zinb3, model.zinb4, model.zinb5,
+       model.zinb6, model.zinb7, model.zinb8, model.zinb9)
+(est.zinb.step <- cbind(Estimate = coef(model.zinb.step), confint(model.zinb.step)))
+
+
+# DIAGNOSTICS (R's defaults won't work -- maybe b/c 2 component model?)
+par(mfrow=c(1,1))
+par(mfrow=c(1,3))
+plot(fitted(model.zinb.step), residuals(model.zinb.step))
+title("Residual vs. Fitted Value Plot")
+plot(data$tpha, residuals(model.zinb.step))
+title("Residuals vs. Observed Values Plot") 
+# tiff(filename = "fit.v.obs_pipo.tif",
+#      width = 4, height = 4, units = "in", res = 200)
+plot(data$tpha, fitted(model.zinb.step),
+     xlab = "observed values",
+     ylab = "fitted values")
+dev.off()
+title("Fitted vs. Observed Values Plot") 
+# plot(data$laoc_dist_bin, residuals(model.zinb.step))
+# title("Residuals vs. Predictor")
+
+# Likelihood ratio test to compare my model to null model
+mod.null <- update(model.zinb.step, ~1)
+lmtest::lrtest(model.zinb.step, mod.null)
+    # Likelihood ratio test
+    # 
+    # Model 1: tpha ~ dem100 + tpi100 | pipo_dist_bin
+    # Model 2: tpha ~ 1
+    #   #Df  LogLik Df  Chisq Pr(>Chisq)    
+    # 1   6 -213.32                         
+    # 2   3 -231.82 -3 36.988  4.628e-08 ***
+
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- psme_sum_all$long
+data$lat <- psme_sum_all$lat
+Moran_space(data, model.zinb.step$residuals)
+# Null is no SAC -- there's very clearly SAC here
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, resids=model.zinb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+# final model
+model.cnt.pipo <- model.zinb.step
+summary(model.cnt.pipo)
+summary(est.cnt.pipo <- cbind(Estimate = coef(model.cnt.pipo), confint(model.cnt.pipo)))
+```
+
+
+
+
+### ZERO-INFLATED - PSME
+```{r ZERO-INFLATED - psme}
+
+data <- psme_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 20)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site back on
+data <- data[, c(8,9,1,2,3,4,5,6,7)] ; print(data) # re-order
+remove(var.scale)
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+summary(model.zinb) 
+model.zinb.step <- stepAIC(model.zinb, direction="backward", scope = .~.^2)
+
+
+####################################################################################
+#### THESE ARE ITERATIONS WHEN 'PSME' SEEDLINGS ARE STILL IN DATASET
+# summary(model.zinb.step) # But this has changed the zero part of the model, too.
+# Looks as though shrub_perc only maintained b/c of zero component.
+# Compare, slimmed down model with shrub_perc in count and NOT in count
+# model.zinb.step1 <- zeroinfl(tpha ~ tpi100 + slp100 + shrub_perc
+#                              + psme_dist_bin | psme_dist_bin,
+#                              data = data,
+#                              dist = "negbin",
+#                              maxit = 100)
+# model.zinb.step2 <- zeroinfl(tpha ~ tpi100 + slp100
+#                              + psme_dist_bin | psme_dist_bin,
+#                              data = data,
+#                              dist = "negbin",
+#                              maxit = 100)
+# AIC(model.zinb, model.zinb.step1, model.zinb.step2) # excluding shrub_perc best per AIC
+# # My final step-informed model with only count (not zero-component) slimmed down:
+# model.zinb.step <- model.zinb.step2
+# summary(model.zinb.step)
+# remove(model.zinb.step1, model.zinb.step2)
+# (est.zinb.step <- cbind(Estimate = coef(model.zinb.step), confint(model.zinb.step)))
+
+
+####################################################################################
+### THESE ARE NEW MODELS FOR WHEN ALL SEEDLINGS ARE EXCLUDED FROM THE DATASET
+summary(model.zinb.step) # try excluding HLI then CTI then SHRUB_PERC
+
+model.zinb.step1 <- zeroinfl(tpha ~ dem100 + slp100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops hli
+
+model.zinb.step2 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100  + shrub_perc
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops cti
+
+model.zinb.step3 <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops shrub
+
+
+AIC(model.zinb, model.zinb.step1, model.zinb.step2, model.zinb.step3) # keep #1 w/o hli
+summary(model.zinb.step1)
+model.zinb.step4 <- zeroinfl(tpha ~ dem100 + slp100 + tpi100  + shrub_perc
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops cti, too
+model.zinb.step5 <- zeroinfl(tpha ~ dem100 + slp100  + tpi100 + cti100 
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops shrub, too
+model.zinb.step6 <- zeroinfl(tpha ~ dem100 + slp100  + tpi100 
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops cti and shrub, too
+AIC(model.zinb.step1, model.zinb.step4, model.zinb.step5, model.zinb.step6) # keep # 6 w/o hli or cti
+summary(model.zinb.step6) # doesn't have hli, cti, or shrub
+model.zinb.step7 <- zeroinfl(tpha ~ slp100  + tpi100 + cti100 
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops dem, too
+model.zinb.step8 <- zeroinfl(tpha ~ dem100 + slp100   
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops tpi
+model.zinb.step9 <- zeroinfl(tpha ~ slp100   
+                       + psme_dist_bin | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100) # drops dem and tpi
+AIC(model.zinb.step6, model.zinb.step7, model.zinb.step8, model.zinb.step9)
+# Keep model #6 which has DEM, SLP, TPI, DIST
+model.zinb.step <- model.zinb.step6
+summary(model.zinb.step)
+remove(model.zinb.step1, model.zinb.step2,
+       model.zinb.step3, model.zinb.step4,
+       model.zinb.step5, model.zinb.step6,
+       model.zinb.step7, model.zinb.step8,
+       model.zinb.step9)
+(est.zinb.step <- cbind(Estimate = coef(model.zinb.step), confint(model.zinb.step)))
+
+
+
+# DIAGNOSTICS (R's defaults won't work -- maybe b/c 2 component model?)
+par(mfrow=c(1,1))
+par(mfrow=c(1,3))
+plot(fitted(model.zinb.step), residuals(model.zinb.step))
+title("Residual vs. Fitted Value Plot")
+plot(data$tpha, residuals(model.zinb.step))
+title("Residuals vs. Observed Values Plot") 
+# tiff(filename = "fit.v.obs_psme.tif",
+#      width = 4, height = 4, units = "in", res = 200)
+plot(data$tpha, fitted(model.zinb.step),
+     xlab = "observed values",
+     ylab = "fitted values")
+dev.off()
+title("Fitted vs. Observed Values Plot") 
+# plot(data$laoc_dist_bin, residuals(model.zinb.step))
+# title("Residuals vs. Predictor")
+
+# Likelihood ratio test to compare my model to null model
+mod.null <- update(model.zinb.step, ~1)
+lmtest::lrtest(model.zinb.step, mod.null)
+    # Likelihood ratio test
+    # 
+    # Model 1: tpha ~ dem100 + slp100 + tpi100 + psme_dist_bin | psme_dist_bin
+    # Model 2: tpha ~ 1
+    #   #Df  LogLik Df  Chisq Pr(>Chisq)    
+    # 1   8 -226.52                         
+    # 2   3 -242.48 -5 31.913  6.183e-06 ***
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- psme_sum_all$long
+data$lat <- psme_sum_all$lat
+Moran_space(data, model.zinb.step$residuals)
+# Null is no SAC -- there's very clearly SAC here
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, resids=model.zinb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+# final model
+model.cnt.psme <- model.zinb.step
+summary(model.cnt.psme)
+(est.cnt.psme <- cbind(Estimate = coef(model.cnt.psme), confint(model.cnt.psme)))
+
+data[which(data$site == "S-123-051"),]
+
+```
+
+
+
+### FINAL MODELS
+```{r FINAL MODELS}
+summary(model.cnt.laoc)
+summary(model.cnt.pico)
+summary(model.cnt.pien)
+summary(model.cnt.pipo)
+summary(model.cnt.psme)
+
+
+```
+
+
+### FIGURES
+```{r FIGURES}
+
+# All spp tpha vs. distnace to live seed source.
+# N.b., analyses and models are based on bins, but to represent visually, use continuos.
+# This means many rows will be dropped for individual species plots b/c only pts with...
+# ... detected live conspecific seed source will be plotted
+p1 <- ggplot(spp_sum, aes(x=min_live_seed_dist, y=tpha)) 
+p1 + geom_point(shape = 16, alpha=1/2, size=6,
+                position = position_jitter(width=1,height=1)) +
+  theme_bw() +
+  labs(x = "Distance to live seed source (m)", y="Juvenile density (stems/ha)") +
+  theme(text = element_text(size=16),
+        axis.text.x = element_text(color="black", size=16),
+        axis.text.y = element_text(color="black", size=16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+dev.off()
+# currentDate <- Sys.Date()
+# ggsave(paste0("tpha_vs_seed_dist_spp_",currentDate,".png"), width = 7, height = 5)
+
+
+# individ tpha vs. distance to live seed source
+
+# Individ spp with ANY live seed dist
+# pico.plot <- ggplot(pico_sum_all, aes(x=min_live_seed_dist, y=tpha))
+# pipo.plot <- ggplot(pipo_sum_all, aes(x=min_live_seed_dist, y=tpha)) 
+# psme.plot <- ggplot(psme_sum_all, aes(x=min_live_seed_dist, y=tpha)) 
+
+pico.plot <- ggplot(pico_sum_all, aes(x=pico_seed_dist, y=tpha))
+pipo.plot <- ggplot(pipo_sum_all, aes(x=pipo_seed_dist, y=tpha)) 
+psme.plot <- ggplot(psme_sum_all, aes(x=psme_seed_dist, y=tpha)) 
+# Set aerial seed bank as factor then establish boxplot inputs
+pico_sum_all$site_air_seed <- as.factor(pico_sum_all$site_air_seed)
+pico.box <- ggplot(pico_sum_all, aes(x=site_air_seed, y=tpha))
+
+# Individ spp with conspecific live seed dist
+# Axis range based on actual range of data (tpha), not just those rows that get plotted.
+# Need to define axis range manually if I don't want large blank space.
+# (Using coord_cartesian vs. solo xlim or ylim WON'T remove unseen datapts.)
+# But, if getting true point @~28,000 in boxplot, ought to keep axis the same
+
+p1 <- pico.plot + geom_point(shape = 16, alpha=1/2, size=3, position = position_jitter(width=1,height=1)) +
+  labs(x = "Distance to live conspecific seed source (m)", y="Juvenile density (stems/ha)") +
+  theme_caitlin() +
+  # coord_cartesian(ylim=c(0,22500)) +
+  # annotate("text", x = 222, y = 22500, label = "lodgepole pine")
+  annotate("text", x = 222, y = 28800, label = "lodgepole pine")
+
+p2 <- pipo.plot + geom_point(shape = 16, alpha=1/2, size=3, position = position_jitter(width=1,height=1)) +
+  labs(x = "Distance to live conspecific seed source (m)", y="Juvenile density (stems/ha)") +
+  theme_caitlin() +
+  annotate("text", x = 260, y = 3150, label = "ponderosa pine")
+
+p3 <- pico.box + geom_boxplot() +
+  labs(x = "Extant cones on snags", y = "Juvenile density (stems/ha)") + 
+  theme_caitlin() +
+  scale_x_discrete(labels = c("not present", "present")) +
+  annotate("text", x = 0.8, y = 28800, label = "lodgepole pine")
+
+p4 <- psme.plot + geom_point(shape = 16, alpha=1/2, size=3, position = position_jitter(width=1,height=1)) +
+  labs(x = "Distance to live conspecific seed source (m)", y="Juvenile density (stems/ha)") +
+  theme_caitlin() +
+  annotate("text", x = 137, y = 1600, label = "Douglas-fir")
+
+# png("//goshawk.sefs.uw.edu/Space_Lawler/Shared/BackedUp/Caitlin/Tripod/Dir/tpha_vs_seed_dist_spp_2018-12-01.png", units = "in", width = 8, height = 6, res = 600)
+# png("D:/Shared/BackedUp/Caitlin/Tripod/Dir/tpha_vs_seed_dist_spp_2018-12-01.png", units = "in", width = 8, height = 6, res = 600)
+multiplot(p1, p2, p3, p4, cols=2)
+dev.off()
+
+# Following will only save most recent plot of multiplot
+# currentDate <- Sys.Date()
+# ggsave(paste0("tpha_vs_seed_dist_spp_",currentDate,".png"), width = 7, height = 7)
+
+
+
+```
+
+
+```{r TEST BURN SEVERITY}
+# Does actual burn severity matter??? Brian Harvey suggested (on 180322) looking at this b/c more recruitment...
+# ... has been observed in areas that had severe surface fires but not nec crown fires.
+# Too low severity doesn't open cones (of PICO), severe surface opens cones, crown burns all.
+# N.b., I used dnbr classification to select sites, but from raw values, see some weren't really that severe...
+sev <- read.csv("burn_severity.csv")
+sev$site <- as.character(sev$site)
+sev$site[50]
+sev$site[50] <- "S-111-011" 
+
+# PICO
+data <- pico_sum_all %>%
+  left_join(sev, by = "site")
+
+colnames(data)
+
+data.raw <- data # for safe-keeping
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 21, 22, 23)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, air_seed=data.raw$site_air_seed) # add site, tpha, air back on
+
+remove(var.scale)
+
+# install.packages("pscl")
+library(pscl)
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed + dnbr | pico_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+
+summary(model.zinb) 
+
+# rdnbr is marginally significant, dnbr is not at all. but dnbr plot suggests peak in middle
+plot(data.raw$tpha ~ data.raw$dnbr)
+
+
+
+# PIPO
+data <- pipo_sum_all %>%
+    left_join(sev, by = "site")
+colnames(data)
+data.raw <- data # for safe-keeping
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 20, 21, 22)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site, tpha back on
+remove(var.scale)
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin + rdnbr | pipo_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+summary(model.zinb) # both dnbr and rdnbr are significant
+plot(data.raw$tpha ~ data.raw$rdnbr)
+
+
+
+# PSME
+data <- psme_sum_all %>%
+    left_join(sev, by = "site")
+colnames(data)
+data.raw <- data # for safe-keeping
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 20, 21, 22)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site, tpha back on
+remove(var.scale)
+model.zinb <- zeroinfl(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin + rdnbr | psme_dist_bin,
+                       data = data,
+                       dist = "negbin",
+                       maxit=100)
+summary(model.zinb) # both dnbr and rdnbr are significant
+plot(data.raw$tpha ~ data.raw$dnbr)
+
+```

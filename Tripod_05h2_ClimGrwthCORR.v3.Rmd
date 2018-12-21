@@ -1,0 +1,469 @@
+---
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+```{r CLIM-GRWTH PREP, include=FALSE}
+# For now, stick with estab in 2008 or earlier so at least 1 or 2 (maybe 3) yr old.
+# Keeipng sites with n=10 trees. No PSME or PIPO tho (n=1 or n=3).
+# Could try with n=5 trees, but then some sites only have samp depth of 1 for '07 '08.
+# chron with 0915 do NOT have 07 or 08 factored into rwi or chron. (Lotsa NAs)
+# ^ But WHOLE tree grwth should factor into detrend function, so leave in...
+# ...and just call for more trees (n=10), which means I don't have any weird corr.
+# Plus, values dont' change THAT MUCH (see rwi_chron_corr_by_hand.xlsx).
+# Considered dropping 07 and 08 below b/c of some NAs, but just set cor to...
+# ..."use = "na.or.complete" to keep in as much data as possible.
+df.chron <- read.csv("chronologies.lm.PICO.estab08.n10.csv")
+# df.chron <- read.csv("chronologies.lm.PICO.estab08.n5.csv")
+# df.chron <- read.csv("chronologies.lm.PICO.estab07.n3.csv")
+# df.chron <- read.csv("chronologies.lm.PICO.estab08.n5.0915.csv")
+df.chron <- df.chron %>%
+  dplyr::select(-X) # weird ID variable gets auto added; remove
+
+# Don't have grwth for estab yr; don't pull from earlier than min(estab_yr)+1...
+# ... else get NAs in correlations.
+# Maybe there's limited data pre 2010 -- much better sampling depth.
+# But keep in mind that RWI is still based on yrs prior to 2010!
+# year <- c("2009", "2010", "2011", "2012", "2013", "2014", "2015")
+year <- c("2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015")
+
+
+# Go back to having individ yrs as rows so I can corrrelate grwth with climate
+# When I transpose, rownames --> colnames
+rownames(df.chron) <- df.chron$site # when I transpose
+# # For yrs 2009 - 2015
+# data <- df.chron %>%
+#   dplyr::select(site, yr2009, yr2010, yr2011, yr2012, yr2013, yr2014, yr2015) %>%  
+#   t()
+# For yrs 2007 - 2015
+data <- df.chron %>%
+  dplyr::select(site, yr2007, yr2008, yr2009,
+                yr2010, yr2011, yr2012, yr2013,
+                yr2014, yr2015) %>%
+  t()
+data <- data[-c(1),]# drop the first row which still has sites in it
+data <- as.data.frame(cbind(data, year))
+# dunno why but data are back to being factors >:(
+# But to make sure column name (sites) stay with hyphen no ., say DON'T check names
+data <- data.frame(lapply(data, function(x) as.numeric(as.character(x))),
+                   check.names = FALSE, row.names = year) 
+
+
+# call data cg for climate growth
+cg <- data
+rownames(cg) <- cg$year ; cg$year <- NULL
+```
+
+
+```{r LOAD & PROCESS CLIAMTE DATA, include=FALSE}
+source("Tripod_01g_ClimateData.v2.R")
+# prep climate data, including adding lag conditions from prior year
+# Stick with divisional which isn't arbitrary delination...
+# ...(as mine would be if I avg'ed over study region)
+# N.b., dropped nClimDiv data, keeping westwide; scrap vpdmax
+# (Don't have division level vpdmax...)
+
+#### WestWide Drought Watch
+wwdt_temp <- wwdt_temp %>%
+  mutate(prev01 = lag(m01, 1),
+         prev02 = lag(m02, 1),
+         prev03 = lag(m03, 1),
+         prev04 = lag(m04, 1),
+         prev05 = lag(m05, 1),
+         prev06 = lag(m06, 1),
+         prev07 = lag(m07, 1),
+         prev08 = lag(m08, 1),
+         prev09 = lag(m09, 1),
+         prev10 = lag(m10, 1),
+         prev11 = lag(m11, 1),
+         prev12 = lag(m12, 1)) %>%
+  dplyr::select(c(13:24,1:12)) # reorder so prior yr come first
+rownames(wwdt_temp) <- c(2006:2016) # lost rownames in last move
+
+wwdt_precip <- wwdt_precip %>%
+  mutate(prev01 = lag(m01, 1),
+         prev02 = lag(m02, 1),
+         prev03 = lag(m03, 1),
+         prev04 = lag(m04, 1),
+         prev05 = lag(m05, 1),
+         prev06 = lag(m06, 1),
+         prev07 = lag(m07, 1),
+         prev08 = lag(m08, 1),
+         prev09 = lag(m09, 1),
+         prev10 = lag(m10, 1),
+         prev11 = lag(m11, 1),
+         prev12 = lag(m12, 1)) %>%
+  dplyr::select(c(13:24,1:12)) # reorder so prior yr come first
+rownames(wwdt_precip) <- c(2006:2016) # lost rownames in last move
+
+remove(wwdt_pdsi)
+# wwdt_pdsi <- wwdt_pdsi %>%
+#   mutate(prev01 = lag(m01, 1),
+#          prev02 = lag(m02, 1),
+#          prev03 = lag(m03, 1),
+#          prev04 = lag(m04, 1),
+#          prev05 = lag(m05, 1),
+#          prev06 = lag(m06, 1),
+#          prev07 = lag(m07, 1),
+#          prev08 = lag(m08, 1),
+#          prev09 = lag(m09, 1),
+#          prev10 = lag(m10, 1),
+#          prev11 = lag(m11, 1),
+#          prev12 = lag(m12, 1)) %>%
+#   dplyr::select(c(13:24,1:12)) # reorder so prior yr come first
+# rownames(wwdt_pdsi) <- c(2006:2016) # lost rownames in last move
+
+wwdt_spei <- wwdt_spei %>%
+  mutate(prev01 = lag(m01, 1),
+         prev02 = lag(m02, 1),
+         prev03 = lag(m03, 1),
+         prev04 = lag(m04, 1),
+         prev05 = lag(m05, 1),
+         prev06 = lag(m06, 1),
+         prev07 = lag(m07, 1),
+         prev08 = lag(m08, 1),
+         prev09 = lag(m09, 1),
+         prev10 = lag(m10, 1),
+         prev11 = lag(m11, 1),
+         prev12 = lag(m12, 1)) %>%
+  dplyr::select(c(13:24,1:12)) # reorder so prior yr come first
+rownames(wwdt_spei) <- c(2006:2016) # lost rownames in last move
+
+remove(vpdmax)
+# # VPDmax from PRISM directly (for grid cell just north of Winthrop)
+# vpdmax <- vpdmax %>%
+#   mutate(prev01 = lag(m01, 1),
+#          prev02 = lag(m02, 1),
+#          prev03 = lag(m03, 1),
+#          prev04 = lag(m04, 1),
+#          prev05 = lag(m05, 1),
+#          prev06 = lag(m06, 1),
+#          prev07 = lag(m07, 1),
+#          prev08 = lag(m08, 1),
+#          prev09 = lag(m09, 1),
+#          prev10 = lag(m10, 1),
+#          prev11 = lag(m11, 1),
+#          prev12 = lag(m12, 1)) %>%
+#   dplyr::select(c(13:24,1:12)) # reorder so prior yr come first
+# rownames(vpdmax) <- c(2006:2016) # lost rownames in last move
+
+wwdt_temp <- wwdt_temp[year, ]
+wwdt_precip <- wwdt_precip[year, ]
+# wwdt_pdsi <- wwdt_pdsi[year, ]
+wwdt_spei <- wwdt_spei[year, ]
+# vpdmax <- vpdmax[year, ]
+
+```
+
+
+```{r CLIM-GRWTH CORRELATIONS, include=FALSE}
+
+# get correlations matrix (deafult=pearson) btwn grown index...
+# ...and climate conditionsthen stick them right into a plot
+# install.packages("corrplot")
+library(corrplot)
+cor_wwdt_temp <- cor(cg, wwdt_temp, use = "na.or.complete") %>%
+  corrplot
+cor_wwdt_precip <- cor(cg, wwdt_precip, use = "na.or.complete") %>%
+  corrplot
+cor_wwdt_spei <- cor(cg, wwdt_spei, use = "na.or.complete") %>%
+  corrplot
+# It's surprising to see HOW MUCh previous yr matters in drought metrics.
+# Is that b/c those metrics are 3 month drought? 3 month spei, etc?
+# Confirmed on WestWide drought (via span in time series query) that...
+# ... what you get in "all months" data query is 1-month.
+# Those conditions may be defined as droughty, but PICO actually likes 'em?
+# With spei, see that relatively less droughty late-summer means more grwth.
+
+```
+
+
+```{r CLIM-GRWTH BY TOPO CORRELATIONS, include=FALSE}
+#### CAREFUL RUNNING B/C ORDERING WILL PERSIST IN NEXT CHUNKs ###
+
+# Pull out topo variables
+topo <- site_summary %>%
+  filter(site %in% names(cg)) %>%
+  dplyr::select(site, dem100, slp100, hli100, tpi100, cti100) 
+# drop sites (levels in factor) that aren't used.
+topo$site <- droplevels(topo$site)
+
+# DEM
+# Arrange topo by DEM then match column names (sites) in cg to position of topo site
+topo <- topo %>%
+  arrange(-dem100) # puts highest elevations up top
+# topo$site # <- gives order I want sites in
+# # Match column names (sites) in cg to the position...
+# # ...of sites in topo df (i.e,. in dem order)
+# match(names(cg), topo$site) # outcome of positions...
+# # shows site is still not REALLY re-ordered
+cor_wwdt_temp_dem <- cor(cg[topo$site], wwdt_temp, use = "na.or.complete") %>%
+  corrplot()
+cor_wwdt_precip_dem <- cor(cg[topo$site], wwdt_precip, use = "na.or.complete") %>%
+  corrplot
+cor_wwdt_spei_dem <- cor(cg[topo$site], wwdt_spei, use = "na.or.complete") %>%
+  corrplot
+
+# Only show certain months (here, prior July thru following Sept)
+cor_wwdt_temp_dem <- cor(cg[topo$site], wwdt_temp[,7:21], use = "na.or.complete") %>%
+  corrplot()
+cor_wwdt_precip_dem <- cor(cg[topo$site], wwdt_precip[,7:21], use = "na.or.complete") %>%
+  corrplot
+cor_wwdt_spei_dem <- cor(cg[topo$site], wwdt_spei[,7:21], use = "na.or.complete") %>%
+  corrplot(., tl.col="black")
+
+
+# SLP
+topo <- topo %>%
+  arrange(slp100) # leaves steepest slopes up top
+cor_wwdt_temp_slp <- cor(cg[topo$site], wwdt_temp, use = "na.or.complete") %>% corrplot
+cor_wwdt_precip_slp <- cor(cg[topo$site], wwdt_precip, use = "na.or.complete") %>% corrplot
+cor_wwdt_spei_slp <- cor(cg[topo$site], wwdt_spei, use = "na.or.complete") %>% corrplot
+
+
+# HLI
+topo <- topo %>%
+  arrange(hli100) # puts highest HLI up top
+cor_wwdt_temp_hli <- cor(cg[topo$site], wwdt_temp, use = "na.or.complete") %>% corrplot
+cor_wwdt_precip_hli <- cor(cg[topo$site], wwdt_precip, use = "na.or.complete") %>% corrplot
+cor_wwdt_spei_hli <- cor(cg[topo$site], wwdt_spei, use = "na.or.complete") %>% corrplot
+
+
+# CTI
+topo <- topo %>%
+  arrange(-cti100) # wettest at bottom, driest on top
+cor_wwdt_temp_cti <- cor(cg[topo$site], wwdt_temp, use = "na.or.complete") %>% corrplot
+cor_wwdt_precip_cti <- cor(cg[topo$site], wwdt_precip, use = "na.or.complete") %>% corrplot
+cor_wwdt_spei_cti <- cor(cg[topo$site], wwdt_spei, use = "na.or.complete") %>% corrplot
+
+
+# TPI
+topo <- topo %>%
+  arrange(-tpi100) # valleys at bottom, ridges on top
+cor_wwdt_temp_tpi <- cor(cg[topo$site], wwdt_temp, use = "na.or.complete") %>% corrplot
+cor_wwdt_precip_tpi <- cor(cg[topo$site], wwdt_precip, use = "na.or.complete") %>% corrplot
+cor_wwdt_spei_tpi <- cor(cg[topo$site], wwdt_spei, use = "na.or.complete") %>% corrplot
+
+
+# TPHA
+tpha <- spp_sum %>%
+  filter(site %in% names(cg)) %>%
+  dplyr::select(site, tpha) %>%
+  arrange(tpha) # most dense at bottom
+# drop sites (levels in factor) that aren't used.
+tpha$site <- droplevels(tpha$site)
+cor_wwdt_temp_tpha <- cor(cg[tpha$site], wwdt_temp, use = "na.or.complete") %>% corrplot
+cor_wwdt_precip_tpha <- cor(cg[tpha$site], wwdt_precip, use = "na.or.complete") %>% corrplot
+cor_wwdt_spei_tpha <- cor(cg[tpha$site], wwdt_spei[,7:21], use = "na.or.complete") %>% corrplot
+
+
+# SNOWFREE
+snowfree <- read.csv("HOBOS/snowfree.csv") %>%
+  filter(site %in% names(cg)) %>%
+  dplyr::select(site, snowfree) %>%
+  arrange(snowfree) # least snow at bottom
+snowfree$site <- droplevels(snowfree$site)
+cor_wwdt_temp_snow <- cor(cg[snowfree$site], wwdt_temp, use = "na.or.complete") %>% corrplot
+cor_wwdt_precip_snow <- cor(cg[snowfree$site], wwdt_precip, use = "na.or.complete") %>% corrplot
+cor_wwdt_spei_snow <- cor(cg[snowfree$site], wwdt_spei, use = "na.or.complete") %>% corrplot
+
+cor_wwdt_temp_dem %>% corrplot()
+cor_wwdt_temp_slp %>% corrplot()
+cor_wwdt_temp_hli %>% corrplot()
+cor_wwdt_temp_cti %>% corrplot()
+cor_wwdt_temp_tpi %>% corrplot()
+cor_wwdt_temp_tpha %>% corrplot()
+cor_wwdt_temp_snow %>% corrplot()
+
+cor_wwdt_precip_dem %>% corrplot()
+cor_wwdt_precip_slp %>% corrplot()
+cor_wwdt_precip_hli %>% corrplot()
+cor_wwdt_precip_cti %>% corrplot()
+cor_wwdt_precip_tpi %>% corrplot()
+cor_wwdt_precip_tpha %>% corrplot()
+cor_wwdt_precip_snow %>% corrplot()
+
+cor_wwdt_spei_dem %>% corrplot()
+cor_wwdt_spei_slp %>% corrplot()
+cor_wwdt_spei_hli %>% corrplot()
+cor_wwdt_spei_cti %>% corrplot()
+cor_wwdt_spei_tpi %>% corrplot()
+cor_wwdt_spei_tpha %>% corrplot()
+cor_wwdt_spei_snow %>% corrplot()
+
+remove(list = ls(pattern = "cor_")) 
+```
+
+
+```{r FINAL FIGURE, include=FALSE}
+tiff(filename = "cor_spei_dem_PICOestab08n10yr0715_prev07m09_SQR.tiff",
+     width = 6, height = 6, units = "in",
+     pointsize = 12, res = 300)
+cor <- cor(cg[topo$site], wwdt_spei[,7:21], use = "na.or.complete")
+colnames(cor) <- c("$July[prior]", "$Aug[prior]", "$Sept[prior]",
+                   "$Oct[prior]", "$Nov[prior]", "$Dec[prior]",
+                   "Jan", "Feb", "Mar", "Apr", "May",
+                   "June", "July", "Aug", "Sept")
+rownames(cor) <- rep("", times = nrow(cor)) # Hack to make remove text on left
+corrplot(cor, tl.col="black", method = "color")
+# mtext("test")
+# temp <- locator(1) # on fig, click where I want text to go
+text(0, 7.5, "Sites in order of elevation", srt=90)
+text(-0.1, 1, "low", srt=0)
+text(-0.1, 14, "high", srt=0)
+dev.off()
+
+# FULL EXTENT (ALL 24 MONTHS)
+# tiff(filename = "cor_precip_dem_PICOestab08n10yr0715_all_SQR.tiff",
+#      width = 8, height = 6, units = "in",
+#      pointsize = 12, res = 300)
+# cor <- cor(cg[topo$site], wwdt_precip[,1:24], use = "na.or.complete")
+# colnames(cor) <- c("$Jan[prior]", "$Feb[prior]", "$Mar[prior]",
+#                    "$Apr[prior]", "$May[prior]", "$Jun[prior]",
+#                    "$July[prior]", "$Aug[prior]", "$Sept[prior]",
+#                    "$Oct[prior]", "$Nov[prior]", "$Dec[prior]",
+#                    "Jan", "Feb", "Mar", "Apr", "May",
+#                    "June", "July", "Aug", "Sept",
+#                    "Oct", "Nov", "Dec")
+# rownames(cor) <- rep("", times = nrow(cor)) # Hack to make remove text on left
+# corrplot(cor, tl.col="black", method = "color")
+# # mtext("test")
+# # temp <- locator(1) # on fig, click where I want text to go
+# text(0, 7.5, "Sites in order of elevation", srt=90)
+# text(-0.1, 1, "low", srt=0)
+# text(-0.1, 14, "high", srt=0)
+# dev.off()
+
+
+```
+
+
+```{r CORR TEST, include=FALSE}
+# People seem to use PRISM more than what's accessible from NCDC.
+# I like the idea of using tmax, but will have to forego that to use tavg with WestWide
+# One reason to NOT use drought index is that those values (for pdsi anyway) will depend on soil.
+# Over an entire climate division, soil will be EXTREMELY variable, so PET may be off.
+# But that may only be relevant for PDSI, as SPEI may not consider soil?
+cor_wwdt_temp <- cor(cg, wwdt_temp) %>% corrplot(., method="color")
+cor_wwdt_precip <- cor(cg, wwdt_precip) %>% corrplot(., method="color")
+cor_wwdt_spei <- cor(cg, wwdt_spei) %>% corrplot(., method="color")
+
+# Visual assessment suggests prev June thru current Sept good to look at
+# grep("prev06", colnames(wwdt_temp)) # 6
+# grep("m09", colnames(wwdt_temp)) # 21
+
+#### ONLY RESET IF I'VE RUN ALL VARIABLES; CAN KEEP ADDING TO VECTORS
+# create empty vectors to fill
+sites <- NULL
+var.names <- NULL
+cors <- NULL
+ps <- NULL
+ts <- NULL
+dfs <- NULL
+months <- NULL
+
+# Pick variable and set so that loop is easy to re-run.
+# Can keep adding on to the above vectors then combine all
+# var <- wwdt_temp ; var.name = "wwdt_temp"
+# var <- wwdt_precip ; var.name = "wwdt_precip"
+var <- wwdt_spei ; var.name = "wwdt_spei"
+# var <- wwdt_pdsi ; var.name = "wwdt_pdsi"
+
+site.loop.ready <- c(1:length(colnames(cg)))
+# month.loop.ready <- c(6:21) # if only previous june thru current sept.
+month.loop.ready <- c(1:24)
+for(i in site.loop.ready){
+  for(j in month.loop.ready){
+
+correlation <- cor.test(cg[,i], var[,j])
+site <- colnames(cg[i]) ; sites <- c(sites, site) # adds new site to prior sites in vector
+var.names <- c(var.names, var.name)
+month <- colnames(var[j]) ; months <- c(months, month)
+cor <-correlation$estimate ; cors <- c(cors, cor) 
+p <-correlation$p.value ; ps <- c(ps, p)
+df<- correlation$parameter ; dfs<-c(dfs,df)
+t<-correlation$statistic ;  ts<-c(ts, t)
+  }
+}
+
+###################################################################
+### ONLY MAKE NEW DATAFRAME AFTER RUNNING ALL DESIRED VARIABLES ###
+site <- sites
+metric <- var.names
+month <- months
+cor <- cors
+p.value <- ps
+dfs <- dfs
+t.stat <- ts
+all_corrs <- data.frame(site, metric, month, cor, p.value, dfs, t.stat)
+# write.csv(all_corrs, "correlations.PICO.estab08.n5.yr0715.csv")
+# remove(cor, cors, df, dfs, p, ps, t, ts, site, sites, month, months, metric, var.names)
+
+```
+
+
+```{r EXPLORE WHICH ARE SIGNIF, include=FALSE}
+# all_corrs <- read.csv("correlations.PICO.estab08.n5.csv")
+corrs_topo <- left_join(all_corrs, topo, by = "site") %>%
+  left_join(., tpha, by = "site") %>%
+  left_join(., snowfree, by = "site")
+
+# Just look at each month to see if there's a linear relationship
+
+
+# data.raw <- corrs_topo # for safe-keeping
+# colnames(data.raw)
+# var.scale <- scale(corrs_topo[, c(8:14)]) # centers and divides by SD
+# data.scaled <- data.frame(var.scale, site=data.raw$site,
+#                    cor=data.raw$cor, month=data.raw$month,
+#                    metric=data.raw$metric)
+# ^ standardizing just allows comparisons ax covariates...
+# ... but it won't rein in super high values as ranking would.
+
+
+data <- corrs_topo %>% filter(month == "prev08") %>% filter(metric == "wwdt_spei")
+
+# If I only want to look at correlations that are significant.
+# data <- data %>% filter(cor > 0.6 | cor < -0.6) %>% filter(p.value < 0.05)
+
+dem.lm <- lm(data = data, cor ~ dem100) ; summary(dem.lm)
+slp.lm <- lm(data = data, cor ~ slp100) ; summary(slp.lm)
+hli.lm <- lm(data = data, cor ~ hli100) ; summary(hli.lm)
+cti.lm <- lm(data = data, cor ~ cti100) ; summary(cti.lm)
+tpi.lm <- lm(data = data, cor ~ tpi100) ; summary(tpi.lm)
+tpha.lm <- lm(data = data, cor ~ tpha) ; summary(tpha.lm)
+snow.lm <- lm(data = data, cor ~ snowfree) ; summary(snow.lm)
+
+
+### See correlations.PICO.estab08.n
+```
+
+
+```{r CONDITION CORR PLOT ON SIGNIF, include=FALSE}
+# REMEMBER THAT ALL_CORRS MAY BE IN DIFF ORDER THAN TOPO ORDER
+# NOT USING THIS -- DROPS OUT DOTS IF THEY'RE NOT SIGNIFICANT.
+library(dplyr)
+
+p.mat <- all_corrs %>%
+  dplyr::filter(metric == "wwdt_spei") %>%
+  dplyr::select(site, month, p.value)
+p.mat <- p.mat %>%
+  spread(key = month, -site) %>%
+  dplyr::select(site, prev01, prev02, prev03, prev04, prev05, prev06,
+         prev07, prev08, prev09, prev10, prev11, prev12,
+         m01, m02, m03, m04, m05, m06,
+         m07, m08, m09, m10, m11, m12) # put months ahead of prev in alphy - redo.
+p.mat <- p.mat %>% arrange(site[order(topo$site)])
+p.mat <- p.mat %>% dplyr::select(-site) %>% as.matrix 
+
+cor <- cor(cg[topo$site], wwdt_spei)
+cor(cg[topo$site], wwdt_spei) %>% corrplot
+cor(cg[topo$site], wwdt_spei, use = "na.or.complete") %>%
+  corrplot(p.mat = p.mat, sig.level = 0.1, insig = "blank")
+
+# Any plotting will be based on the order of levels (or rownames) in attributes
+
+```
+
+remove(list = ls(pattern = "cor_"))
+remove(list = ls(pattern = ".test"))

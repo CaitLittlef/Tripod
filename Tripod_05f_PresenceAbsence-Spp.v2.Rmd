@@ -1,0 +1,344 @@
+---
+title: "Presence Absence"
+author: "CaitLittlef"
+date: "May 22, 2017"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+---
+
+##### Must run Tripod_00_Main.R (and sourced codes therein) before proceeding!
+READ FIRST:
+http://thestatsgeek.com/2014/02/16/the-hosmer-lemeshow-goodness-of-fit-test-for-logistic-regression/
+http://thestatsgeek.com/2014/05/05/area-under-the-roc-curve-assessing-discrimination-in-logistic-regression/
+https://developers.google.com/machine-learning/crash-course/classification/roc-and-auc
+
+For given values of the model covariates, we can obtain the predicted probability P(Y=1|X1,..,Xp)P(Y=1|X1,..,Xp). The model is said to be well calibrated if the observed risk matches the predicted risk (probability). That is, if we were to take a large group of observations which are assigned a value P(Y=1)=0.2P(Y=1)=0.2, the proportion of these observations with Y=1Y=1 ought to be close to 20%. If instead the observed proportion were 80%, we would probably agree that the model is not performing well - it is underestimating risk for these observations. The comparison between predicted probabilities and observed proportions is the basis for the Hosmer-Lemeshow test.
+...
+As well as being well calibrated, we would therefore like our model to have high discrimination ability. In the binary outcome context, this means that observations with Y=1Y=1 ought to be predicted high probabilities, and those with Y=0Y=0 ought to be assigned low probabilities. Such a model allows us to discriminate between low and high risk observations.
+...
+To explain the ROC curve, we first recall the important notions of sensitivity and specificity of a test or prediction rule. The sensitivity is defined as the probability of the prediction rule or model predicting an observation as 'positive' given that in truth (Y=1). In words, the sensitivity is the proportion of truly positive observations which is classified as such by the model or test. Conversely the specificity is the probability of the model predicting 'negative' given that the observation is 'negative' (Y=0).
+
+Info re: perfect separation and too few of the less common outcomes:
+https://stats.stackexchange.com/questions/26016/sample-size-for-logistic-regression
+http://www2.sas.com/proceedings/forum2008/360-2008.pdf
+One issue is that logistic regression works best when the percentages of 1's and 0's is approximately 50% / 50% (as @andrea and @psj discuss in the comments above). Another issue to be concerned with is separation. That is, you don't want to have all of your 1's gathered on one extreme of an independent variable (or some combination of them), and all of the 0's at the other extreme. Although this would seem like a good situation, because it would make perfect prediction easy, it actually makes the parameter estimation process blow up. (@Scortchi has an excellent discussion of how to deal with separation in logistic regression here: How to deal with perfect separation in logistic regression?)
+
+### SCALE DATA
+```{r SCALE ALL DATA}
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- PAdata # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data.raw[, c(5, 6, 7, 9, 10, 15, 31:36)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site,
+                   data.raw$abla_PA,
+                   data.raw$laoc_PA,
+                   data.raw$pico_PA,
+                   data.raw$pien_PA,
+                   data.raw$pipo_PA,
+                   data.raw$psme_PA,
+                   data.raw$site_air_seed)
+remove(var.scale)
+```
+
+
+```{r binomial GLM -- ABLA}
+#ABLA
+
+## UPDATE: RULE OF THUMB IS THAT YOU NEED AT LEAST 15 OF LESS FREQUENT OUTCOME...
+## ...FOR EACH VARIABLE TO AVOID SATURATED MODEL. SO, ABLA WON'T FLY
+
+model.bin = glm(abla_PA ~ dem100
+                + slp100
+                + hli100
+                + tpi100
+                + cti100
+                + shrub_perc
+                + abla_dist_bin,
+                data = PAdata,
+                family = (binomial(link="logit")),
+                maxit=100)
+summary(model.bin) # WHY ARE ALL Zs=1 AND ALL p=0??
+
+## SEE WARNING: glm.fit: fitted probabilities numerically 0 or 1 occurred.
+# THINK THIS MEANS MODEL IS PERFECTLY SEPARATED.
+
+# Perfect separation: phenomenon with dichotomous models. Happens if predictor...
+# ...(or linear combo of) is asso w/ only 1 outcome value when predictor > some constant.
+# E.g., if y=1 for all x>2, and y=0 for all x=<2, it's complete separation.
+# Why is this a prob? Parameter "wants" to be infinite if complete separation observed.
+# Picture plot with lotsa y=0 to left of x=0 and y=1 to right of x=1...
+# ...which if increasingly fine-tuned curves would you choose?
+# Scott suggests that I could tweak some of my 0-->1 and 1--> to see how sensitive model is.
+# Maybe I can still get a legit one. But given very few obs, I'm just gonna move on...
+
+model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
+summary(model.bin.step)
+
+# Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
+# Set # groups g to > # covariates + 1
+hl <- hoslem.test(PAdata$abla_PA, fitted(model.bin.step), g=7)
+cbind(hl$observed, hl$expected)
+# Not sure why this only gives 2 groups -- perhaps b/c grps based on predicted probabilities.
+# And here, my model is basically only predicting 0 or 1 (likely b/c it's overfit)
+#                    y0 y1 yhat0        yhat1
+# [2.22e-16,8.7e-12] 42  0    42 8.187135e-12
+# (8.7e-12,1]         3  4     3 4.000000e+00
+# In first group, see and predict 42 zeros (yhat0), yhat1 is expected # of 1s.
+hl # Gives p value of 1, which gives no evidence of poor fit...
+# ... not does it give proof that model fits well. (signif p says poor fit)
+# (I suspect it's very much overfit... see AUC of ROC below)
+
+# ROC curve assesses discrimination w/ sensitivity & specificity
+abla_pred=predict(model.bin.step, type ="response")
+PAdata$abla_pred <- abla_pred
+roccurve <- roc(abla_PA ~ abla_pred, data = PAdata)
+par(mfrow=c(1,1))
+plot(roccurve)
+auc(roccurve)
+# Want roc to = 1, as it suggests perfect sensitivity (true positives)...
+# ...and specificity (true negatives)
+
+# All told, model is probably nailing the observations I gave it...
+# ... but has little predictive power outside of my study area (esp. given small n)
+
+model.PA.abla <- model.bin.step
+summary(model.PA.abla)
+```
+
+### LAOC
+```{r binomial GLM -- LAOC}
+# LAOC -- I only have 10/49 sites with LAOC...
+# ... but I'm getting non-zero z-scores unlike ABLA. So keep...
+model.bin = glm(laoc_PA ~ dem100
+                + slp100
+                + hli100
+                + tpi100
+                + cti100
+                + shrub_perc
+                + laoc_dist_bin,
+                data = PAdata,
+                family = (binomial(link="logit")),
+                maxit=100)
+summary(model.bin)
+
+model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
+summary(model.bin.step)
+
+# Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
+# Set # groups g to > # covariates + 1
+# If I cite: Quinn, S. J., Hosmer, D. W., & Blizzard, C. L. (2015). Goodness-of-fit statistics for log-link regression models. Journal of Statistical Computation and Simulation, 85(12), 2533-2545.
+hl <- hoslem.test(PAdata$laoc_PA, fitted(model.bin.step), g=5)
+cbind(hl$observed, hl$expected)
+hl # Gives p value of 0.8939, which gives no evidence of poor fit...
+
+# ROC curve assesses discrimination w/ sensitivity & specificity
+laoc_pred=predict(model.bin.step, type ="response")
+PAdata$laoc_pred <- laoc_pred
+roccurve <- roc(laoc_PA ~ laoc_pred, data = PAdata)
+plot(roccurve)
+auc(roccurve) # Want 1, here, 0.9385
+
+model.PA.laoc <- model.bin.step
+summary(model.PA.laoc)
+
+```
+
+### PICO
+```{r binomial GLM -- PICO}
+#PICO
+model.bin = glm(pico_PA ~ dem100
+                + slp100
+                + hli100
+                + tpi100
+                + cti100
+                + shrub_perc
+                + pico_dist_bin
+                + site_air_seed,
+                data = PAdata,
+                family = (binomial(link="logit")),
+                maxit=100)
+summary(model.bin)
+
+# install.packages("arm")
+# library(arm)
+# test = bayesglm(pico_PA ~ dem100
+#                 + slp100
+#                 + hli100
+#                 + tpi100
+#                 + cti100
+#                 + shrub_perc
+#                 + pico_dist_bin
+#                 + site_air_seed,
+#                 data = PAdata,
+#                 family = binomial(link="logit"))
+# summary(test)
+
+
+# All z values are 0, all p values are 1 so scrap this. Too few absences observed.
+```
+
+### PIEN
+```{r binomial GLM -- PIEN}
+# PIEN -- I only have 9/49 sites with PIEN...
+# ... but I'm getting non-zero z-scores unlike ABLA or PICO. So keep...
+model.bin = glm(pien_PA ~ dem100
+                + slp100
+                + hli100
+                + tpi100
+                + cti100
+                + shrub_perc
+                + pien_dist_bin,
+                data = PAdata,
+                family = (binomial(link="logit")),
+                maxit=100)
+summary(model.bin)
+
+model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
+summary(model.bin.step)
+
+# Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
+# Set # groups g to > # covariates + 1
+hl <- hoslem.test(PAdata$pien_PA, fitted(model.bin.step), g=6)
+cbind(hl$observed, hl$expected)
+hl # Gives p value of 0.1884, which is getting close to poor fit...
+
+# ROC curve assesses discrimination w/ sensitivity & specificity
+pien_pred=predict(model.bin.step, type ="response")
+PAdata$pien_pred <- pien_pred
+roccurve <- roc(pien_PA ~ pien_pred, data = PAdata)
+plot(roccurve)
+auc(roccurve) # Want 1, here, 0.8583
+
+model.PA.pien <- model.bin.step
+summary(model.PA.pien)
+
+```
+
+
+### PIPO
+```{r binomial GLM -- PIPO}
+
+model.bin = glm(pipo_PA ~ dem100
+                + slp100
+                + hli100
+                + tpi100
+                + cti100
+                + shrub_perc
+                + pipo_dist_bin,
+                data = PAdata,
+                family = (binomial(link="logit")),
+                maxit=100)
+summary(model.bin)
+
+model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
+summary(model.bin.step)
+
+# Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
+# Set # groups g to > # covariates + 1
+hl <- hoslem.test(PAdata$pipo_PA, fitted(model.bin.step), g=6)
+cbind(hl$observed, hl$expected)
+hl # Gives p value of 0.7837, suggests no evidence of poor fit
+
+# ROC curve assesses discrimination w/ sensitivity & specificity
+pipo_pred=predict(model.bin.step, type ="response")
+PAdata$pipo_pred <- pipo_pred
+roccurve <- roc(pipo_PA ~ pipo_pred, data = PAdata)
+plot(roccurve)
+auc(roccurve) # Want 1, here, 0.9267
+
+model.PA.pipo <- model.bin.step
+summary(model.PA.pipo)
+
+```
+
+
+### PSME
+```{r binomial GLM -- PSME}
+model.bin = glm(psme_PA ~ dem100
+                + slp100
+                + hli100
+                + tpi100
+                + cti100
+                + shrub_perc
+                + psme_dist_bin,
+                data = PAdata,
+                family = (binomial(link="logit")),
+                maxit=100)
+summary(model.bin)
+
+model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
+summary(model.bin.step)
+
+# Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
+# Set # groups g to > # covariates + 1
+hl <- hoslem.test(PAdata$psme_PA, fitted(model.bin.step), g=4)
+cbind(hl$observed, hl$expected)
+hl # Gives p value of 0.5407, suggests no evidence of poor fit
+
+# ROC curve assesses discrimination w/ sensitivity & specificity
+psme_pred=predict(model.bin.step, type ="response")
+PAdata$psme_pred <- psme_pred
+roccurve <- roc(psme_PA ~ psme_pred, data = PAdata)
+plot(roccurve)
+auc(roccurve) # Want 1, here, 0.8466
+
+# SPATIAL AUTOCORRELATION
+data$long <- laoc_sum_all$long
+data$lat <- laoc_sum_all$lat
+Moran_space(data, model.bin.step$residuals)
+# Null is no SAC
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, resids=model.bin.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+
+model.PA.psme <- model.bin.step
+summary(model.PA.psme)
+
+
+```
+
+
+
+### PLOT OPTIONS
+```{r PLOT OPTIONS}
+
+summary(model.PA.laoc)
+summary(model.PA.pien)
+summary(model.PA.pipo)
+summary(model.PA.psme)
+
+
+### 180206: ALL OF THESE PLOT GENERATORS HAVE BEEN CHANGED
+
+`sjp.glm()` will become deprecated in the future. Please use `plot_model()` instead.
+This plot type has been removed, as it was misleading. Use `plot_model` with `type = "pred"` to plot marginal effects, or with `type = "slope"` for model diagnostisc.
+
+
+
+# Pick most significant topo predictors for laoc
+sjp.glm(model.PA.laoc, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "dem100")
+
+# Pick most significant topo predictors for pien
+sjp.glm(model.PA.pien, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "dem100")
+sjp.glm(model.PA.pien, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "cti100")
+
+# Pick most significant topo predictors for pipo
+sjp.glm(model.PA.pipo, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "dem100")
+sjp.glm(model.PA.pipo, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "slp100")
+sjp.glm(model.PA.pipo, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "tpi100")
+
+# No significant topo predictors for psme.
+# All of the above plots have pretty lousy curves except for DEM & LAOC.
+
+http://www.theanalysisfactor.com/r-glm-plotting/
+```

@@ -1,0 +1,841 @@
+---
+title: "Tripod_05g_EstabYrFreq"
+author: "CaitLittlef"
+date: "January 29, 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+
+
+If I'm seeking mode of establishment years for each site, I can just take mode of trees sampled at each site. I don't need to use any expansion factor because I'm not expressing on a per area basis.
+
+From Urza & Sibold 2013, we know that bud-scar counts consistently underestimate the age of taller and older seedlings. But even when bud-scar estaimations of total seedling age had low accuracy, most recent yeras of growth are reliably identified. Because our juveniles range in age and height, I don't want to apply a correction factor across all of them. If we assume that our error rate was consistent across all of our sites (e.g., we underestimate 1 yr on all seedlings) and we're not going for TURLY ACCURATE establishment year but rather going for relative establishment and drivers of such -- then I don't need to apply a correction factor.
+```{r setup, include=FALSE}
+
+# mean_estab_yr_spp <- tripod %>%
+#   group_by(., site) %>%
+#   summarize_at(c("estab_yr"),
+#                funs(mean(., na.rm=TRUE)))
+# 
+# median_estab_yr_spp <- tripod %>%
+#   group_by(., site) %>%
+#   summarize_at(c("estab_yr"),
+#                funs(median(., na.rm=TRUE)))
+# 
+# min_estab_yr_spp <- tripod %>%
+#   group_by(., site) %>%
+#   summarize_at(c("estab_yr"),
+#                funs(min(., na.rm=TRUE)))
+# 
+# max_estab_yr_spp <- tripod %>%
+#   group_by(., site) %>%
+#   summarize_at(c("estab_yr"),
+#                funs(max(., na.rm=TRUE)))
+
+ttl_by_spp <- tripod %>%
+  filter(! spp == "SEEDLING") %>%
+  group_by(., spp) %>%
+  summarize_at(c("tpha"),
+               funs(sum(., na.rm=TRUE)))
+
+min_estab_yr_individ <- tripod %>%
+  filter(! spp == "SEEDLING") %>%
+  group_by(., site, spp) %>%
+  summarize_at(c("estab_yr"),
+               funs(min(., na.rm=TRUE)))
+
+# For figure and comparison purposes, drop any NONEs and any Inf (i.e., don't have yr recorded)
+drops <- c("NONE", "UNKN")
+min_estab_yr_individ <-min_estab_yr_individ[! min_estab_yr_individ$spp %in% drops,]
+drops <- Inf
+min_estab_yr_individ <-min_estab_yr_individ[! min_estab_yr_individ$estab_yr %in% drops,]
+
+data <- min_estab_yr_individ
+
+# Boxplot of minimum establishment years by individual species (of all the individs sampled)
+
+spp.names <- c("subalpine\nfir",
+               "western\nlarch",
+               "lodgepole\npine",
+               "Engelmann\nspruce",
+               "ponderosa\npine",
+               "Douglas-\nfir")
+
+estab_plot <- ggplot(data = data, aes(x = spp, y = estab_yr))
+estab_plot + geom_boxplot() +
+  labs(x = "Species", y = "Earliest year of establishment") + 
+  scale_x_discrete(labels = spp.names) + 
+  scale_y_continuous(breaks=2006:2016) +
+  coord_flip() + 
+  theme_caitlin()
+
+
+# More interesting?
+# estab_plot + geom_violin(fill="black") +
+#   labs(x = "Species", y = "Earliest year of establishment") + 
+#   scale_x_discrete(labels = spp.names) +
+#   coord_flip() +
+#   theme_caitlin()
+
+currentDate <- Sys.Date()
+ggsave(paste0("min_estab_yr_vs_spp_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+# ANOVA to test difference between individual species minimum establishment years
+mod.yr <- lm(estab_yr ~ spp, data = data)
+anova(mod.yr)
+aov <- aov(estab_yr ~ spp, data = data)
+
+# OK, yes significant difference, but now need to do pair-wise comparison
+TukeyHSD(aov)
+
+# Or b/c not normal, use non-parametric Kruskal-Wallis
+library(dunn.test)
+kw <- kruskal.test(estab_yr ~ spp, data = data) ; kw
+dunn <- dunn.test(x=data$estab_yr, g=data$spp, kw=TRUE)
+
+remove(mod.yr, aov, kw, dunn)
+
+# Maybe I should consider 2-way ANOVA to include min dist seed source...?
+# Or it may be a sufficient conclusion to demonstrate that PICO is diff from all.
+
+```
+
+
+```{r FILL IN MISSING YRS}
+(library(dplyr))
+# Try capturing all the trees... fill in NAs at any given site with reps from that site
+yrly_estab <- tripod %>%
+  filter(! spp == "SEEDLING") %>%
+  group_by(.,site, estab_yr, spp) %>%
+  summarize_at(c("tpha"),
+               funs(sum(., na.rm=TRUE)))
+
+# Drop records (plots/quadrants) with no trees
+yrly_estab$estab_yr <- as.factor(yrly_estab$estab_yr)
+drops <- c("NONE")
+yrly_estab <-yrly_estab[! yrly_estab$spp %in% drops,]
+
+
+# drops are the records that have yr tbd; temp are records that have known yr
+drops <- yrly_estab[is.na(yrly_estab$estab_yr),] %>%
+  dplyr::rename(tbd = tpha)
+temp <- yrly_estab[! is.na(yrly_estab$estab_yr),]
+
+# in drops
+# S-322-577 NA ABLA 25.46479 <- won't be able to distribute b/c no aged abla at that site
+# S-332-720 NA ABLA 76.39437
+# in temp
+# S-231-304 2009 ABLA 25.46479
+# S-321-502 2009 ABLA 25.46479
+# S-332-720 2011 ABLA 50.9295 <- will be surrogate for unaged 720s above
+
+
+
+# I want to fill in all the estab_yr tbds. Add new column that gives total of that species...
+# with KNOWN years so I can then get proportion of aged trees of a given species, given yr.
+temp1 <- temp %>%
+  dplyr::group_by(., site, spp) %>%  
+  dplyr::mutate(ttl = sum(tpha)) %>% # gives total of that spp at site across all yrs
+  dplyr::mutate(prop = tpha/ttl) # gives prop of that yr for given spp of that spp at site
+# I'll use that proportion of each-yr representation to assign non-aged trees (aka tbd, stored in drops)
+
+# Gives table with all legit tpha records replicated for each drop at given site.
+temp2 <- full_join(temp1, drops, by = "site")
+# See that ALBA 2011 have corresponding ABLA (unaged) from drops
+# See that ABLA 2009 have NO corresponding ABLA (unaged) from drops
+# Make sure I don't lose either 2009 or 2011 that are actually measured!!
+# Then somehow quantify the number of trees that remain unaged -- maybe add back in somehow?
+
+
+# If spp from actually aged data (tpha) and non-aged data (tbd) match, then distribute tbd
+# Letting tpha.new exist if I'm adding conspecific tpha and tbd. 
+# OR letting tpha.new exist if there's no tbd -- just keep original tpha.
+temp3 <- temp2 %>%
+  mutate(add = ifelse(spp.x == spp.y, prop*tbd, 0)) %>% # if species match, compute # tbd to distribute
+  mutate(tpha.new = ifelse((spp.x == spp.y | prop == 1), tpha + add, NA)) %>% 
+  filter(!is.na(tpha.new))
+# ABLA from 2009 and from 2011 remain (with new assigned unaged ones at site 720)
+
+# Renames and selects relevant variabes; nixes duplicate spp&yr which had no tbd
+temp4 <- temp3 %>%
+  dplyr::rename(estab_yr = estab_yr.x, spp = spp.x) %>%
+  dplyr::select(site, estab_yr, spp, tpha.new) %>% # dplyr select classes with MASS
+  distinct()
+
+# Take average across all sites of each species established in each year
+data <- temp4 %>%
+  group_by(estab_yr, spp) %>%
+  summarize_at(c("tpha.new"),
+               funs(mean(., na.rm=TRUE)))
+
+# Now find all those drops that didn't have a home...
+# ...when ALL indivds of that spp at that site were unaged
+# anti_join gives all rows in x where no matching y, just keeping col from x
+aged <- temp %>% dplyr::group_by(site, spp) %>% dplyr::summarize(n.aged=n())
+ageless <- anti_join(drops, aged)
+# These 18 observations have no age and no age to reference.
+# Not too many so I'm NOT going to distribute those ages based on study area representation.
+# Just need to add caveat below estab age figures.
+
+remove(temp, temp1, temp2, temp3, temp4, drops, aged, ageless)
+
+data.orig <- data
+
+# I'll want to preserve all the years in each plot; n.b., 2016 isn't here b/c I've filtered germinants out of dataset
+all_yrs <- as.data.frame(matrix(c("2006","2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015"), ncol=1, byrow=TRUE))
+all_yrs <- all_yrs %>%
+  dplyr::rename(estab_yr = V1)
+yr_since <- (0:9)
+```
+
+
+```{r PLOTS OF ESTAB YR}
+# Load climate data
+source("Tripod_01g_ClimateData.v2.R")
+# Potential climate variables to use as color bars.
+# Not using annual b/c includes conditions from after growing season.
+# Creating SPEI avg for select months means grouping, which drops attributes.
+# Re-adding attributes drops names of new column.
+# N.b., if I want to do temp or precip, change plot limits and for precip, do SUM not MEAN
+# Also n.b., dplyr doesn't like un-tidy data so summarizing across rows just returned first value.
+# Forcing it to use untidy data here by spelling out average:
+var <- wwdt_spei %>%
+  mutate(amjj = (m04 + m05 + m06 + m07)/4) %>%
+  mutate(mjja = (m05 + m06 + m07 + m08)/4) %>%
+  mutate(amjjas = (m04 + m05 + m06 + m07 + m08 + m09)/6) %>%
+  mutate(year = rownames(wwdt_spei))
+# write.csv(var, "summary_spei.csv")
+# 
+# var <- wwdt_temp %>%
+#   mutate(amjj = (m04 + m05 + m06 + m07)/4) %>%
+#   mutate(amjjas = (m04 + m05 + m06 + m07 + m08 + m09)/6) %>%
+#   mutate(year = rownames(wwdt_temp))
+# write.csv(var, "summary_temp.csv")
+# 
+# 
+# var <- wwdt_precip %>%
+#   mutate(amjj = (m04 + m05 + m06 + m07)) %>%
+#   mutate(mjja = (m05 + m06 + m07 + m08)) %>%
+#   mutate(amjjas = (m04 + m05 + m06 + m07 + m08 + m09)) %>%
+#   mutate(year = rownames(wwdt_precip))
+# write.csv(var, "summary_precip.csv")
+
+
+var <- var %>%
+  dplyr::filter(year == c(2006:2015)) %>%
+  # dplyr::select(mjja)
+  dplyr::select(amjj)
+  
+var <-c(var$amjj)
+
+# Secondary axis (sec_axis()) must be 1:1 transformation of primary axis.
+# Here, setting 100 to equal twice the max value of the tpha
+# Figure out what to do with color guide, now turned off.
+
+####ABLA#######################################################################
+# ABLA 
+# Select data
+data <- data.orig[which(data.orig$spp == "ABLA"),]
+data <- left_join(all_yrs, data, by = "estab_yr")
+data$tpha.new[which(is.na(data$tpha.new))] <- 0
+
+# I'll want cumulative line about twice as high as max annual estab.
+# This creates cumulative proportions and *max*2 translates/stretches values to double max.
+cumscaled <- (cumsum(data$tpha.new)/sum(data$tpha.new)) * (max(data$tpha.new) * 1.05)
+
+# colors=c("red", "white", "blue") # too purply
+colors=c("sandybrown", "white", "skyblue") 
+# colors=c("#ef8a62", "#f7f7f7", "#67a9cf") # more red to blue
+
+# Create plot with 3 elements: tpha each yr, cumulative curve, drought each yr
+abla_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(width = 0.95) + # puts tiny space btwn columns (vs. width = 1)
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) + # fill in space below y=axis with drought indicator; scaling by max of data so these will be same size across plots
+  scale_fill_gradientn(colors=colors,
+                       values = c(0,0.5,1),  # mid num gives where, relatively, to put white
+                       guide = "colourbar",
+                       name = "SPEI",
+                       # limits = c(min(var), max(var)), # alt is to set these to c(min(var), max(var))
+                       # breaks = c(min(var), 0, max(var)), # alt is to set these to c(min(var),0,  max(var))
+                       # labels = c(min(var), 0, max(var))) +
+                       limits = c(-1.5, 1.5), # alt is to set these to c(min(var), max(var))
+                       breaks = c(-1.5, 0, 1.5), # alt is to set these to c(min(var),0,  max(var))
+                       labels = c(-1.5, 0, 1.5)) +
+  geom_line(aes(y = cumscaled, group =1), linetype = 1, size = 1) + # add cumulative line
+  scale_x_discrete(expand = c(0, 0), drop=FALSE, labels = data$estab_yr) + # don't add L/R space to x-axis
+  scale_y_continuous(expand = c(0,0), # don't add any space above/below y-axis
+                     limits = c(-(0.05*max(data$tpha.new)), # add space below y for drought bar
+                                max(data$tpha.new) * 1.15), # the 0.15 adds lil space above
+                     # add secondary axis: must be 1:1 transformation of primary axis. Here, 2*max = 100%
+                     sec.axis = sec_axis(~./(max(data$tpha.new) * 1.05/100), name = "Cumulative %")) +
+  labs(x = NULL, y = "Density (stems/ha)") +
+  theme_caitlin() + 
+  theme(legend.position= "none") +
+  # annotate with name of spp, set at top of graph (there's spaec b/c limit is  2.05)
+  annotate("text", x =1, y = max(data$tpha.new) * 1.1, label = "subalpine fir", hjust= 0)
+abla_plot
+temp <- abla_plot
+abla_plot <- ggplotGrob(abla_plot) # If I don't save as object, seems to get re-drawn and loses axes
+currentDate <- Sys.Date()
+ggsave(paste0("estab_abla_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+
+
+###LAOC########################################################################
+# LAOC 
+data <- data.orig[which(data.orig$spp == "LAOC"),]
+data <- left_join(all_yrs, data, by = "estab_yr")
+data$tpha.new[which(is.na(data$tpha.new))] <- 0
+cumscaled <- (cumsum(data$tpha.new)/sum(data$tpha.new)) * (max(data$tpha.new) * 1.05)
+laoc_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(width = 0.95) + 
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) +
+  scale_fill_gradientn(colors=c("sandybrown", "white", "skyblue"),
+                       values = c(0,0.5,1), 
+                       guide = "colourbar",
+                       name = "SPEI",
+                       limits = c(-1.5, 1.5),
+                       breaks = c(-1.5, 0, 1.5),
+                       labels = c(-1.5, 0, 1.5)) +
+  geom_line(aes(y = cumscaled, group =1), linetype = 1, size = 1) +
+  scale_x_discrete(expand = c(0, 0), drop=FALSE, labels = data$estab_yr) +
+  scale_y_continuous(expand = c(0,0), # 
+                     limits = c(-(0.05*max(data$tpha.new)),
+                                max(data$tpha.new) * 1.15),
+                     sec.axis = sec_axis(~./(max(data$tpha.new) * 1.05/100), name = "Cumulative %")) +
+  labs(x = NULL, y = "Density (stems/ha)") +
+  theme_caitlin() +
+  theme(legend.position= "none") +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "western larch", hjust= 0)
+laoc_plot
+laoc_plot <- ggplotGrob(laoc_plot)
+currentDate <- Sys.Date()
+ggsave(paste0("estab_laoc_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+
+###PICO########################################################################
+# PICO 
+data <- data.orig[which(data.orig$spp == "PICO"),]
+data <- left_join(all_yrs, data, by = "estab_yr")
+data$tpha.new[which(is.na(data$tpha.new))] <- 0
+cumscaled <- (cumsum(data$tpha.new)/sum(data$tpha.new)) * (max(data$tpha.new) * 1.05)
+pico_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(width = 0.95) + 
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) +
+  scale_fill_gradientn(colors=c("sandybrown", "white", "skyblue"),
+                       values = c(0,0.5,1), 
+                       guide = "colourbar",
+                       name = "SPEI",
+                       limits = c(-1.5, 1.5),
+                       breaks = c(-1.5, 0, 1.5),
+                       labels = c(-1.5, 0, 1.5)) +
+  geom_line(aes(y = cumscaled, group =1), linetype = 1, size = 1) +
+  scale_x_discrete(expand = c(0, 0), drop=FALSE, labels = data$estab_yr) +
+  scale_y_continuous(expand = c(0,0), # 
+                     limits = c(-(0.05*max(data$tpha.new)),
+                                max(data$tpha.new) * 1.15),
+                     sec.axis = sec_axis(~./(max(data$tpha.new) * 1.05/100), name = "Cumulative %")) +
+  labs(x = NULL, y = "Density (stems/ha)") +
+  theme_caitlin() + 
+  theme(legend.position= "none") +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "lodgepole pine", hjust= 0)
+pico_plot
+pico_plot <- ggplotGrob(pico_plot)
+currentDate <- Sys.Date()
+ggsave(paste0("estab_pico_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+###PIEN########################################################################
+# PIEN 
+data <- data.orig[which(data.orig$spp == "PIEN"),]
+data <- left_join(all_yrs, data, by = "estab_yr")
+data$tpha.new[which(is.na(data$tpha.new))] <- 0
+cumscaled <- (cumsum(data$tpha.new)/sum(data$tpha.new)) * (max(data$tpha.new) * 1.05)
+pien_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(width = 0.95) + 
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) +
+  scale_fill_gradientn(colors=c("sandybrown", "white", "skyblue"),
+                       values = c(0,0.5,1), 
+                       guide = "colourbar",
+                       name = "SPEI",
+                       limits = c(-1.5, 1.5),
+                       breaks = c(-1.5, 0, 1.5),
+                       labels = c(-1.5, 0, 1.5)) +
+  geom_line(aes(y = cumscaled, group =1), linetype = 1, size = 1) +
+  scale_x_discrete(expand = c(0, 0), drop=FALSE, labels = data$estab_yr) +
+  scale_y_continuous(expand = c(0,0), # 
+                     limits = c(-(0.05*max(data$tpha.new)),
+                                max(data$tpha.new) * 1.15),
+                     sec.axis = sec_axis(~./(max(data$tpha.new) * 1.05/100), name = "Cumulative %")) +
+  labs(x = NULL, y = "Density (stems/ha)") +
+  theme_caitlin() + 
+  theme(legend.position= "none") +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "Englemann spruce", hjust= 0)
+pien_plot
+pien_plot <- ggplotGrob(pien_plot)
+currentDate <- Sys.Date()
+ggsave(paste0("estab_pien_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+
+###PIPO########################################################################
+# PIPO 
+data <- data.orig[which(data.orig$spp == "PIPO"),]
+data <- left_join(all_yrs, data, by = "estab_yr")
+data$tpha.new[which(is.na(data$tpha.new))] <- 0
+cumscaled <- (cumsum(data$tpha.new)/sum(data$tpha.new)) * (max(data$tpha.new) * 1.05)
+pipo_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(width = 0.95) + 
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) +
+  scale_fill_gradientn(colors=c("sandybrown", "white", "skyblue"),
+                       values = c(0,0.5,1), 
+                       guide = "colourbar",
+                       name = "SPEI",
+                       limits = c(-1.5, 1.5),
+                       breaks = c(-1.5, 0, 1.5),
+                       labels = c(-1.5, 0, 1.5)) +
+  geom_line(aes(y = cumscaled, group =1), linetype = 1, size = 1) +
+  scale_x_discrete(expand = c(0, 0), drop=FALSE, labels = data$estab_yr) +
+  scale_y_continuous(expand = c(0,0), # 
+                     limits = c(-(0.05*max(data$tpha.new)),
+                                max(data$tpha.new) * 1.15),
+                     sec.axis = sec_axis(~./(max(data$tpha.new) * 1.05/100), name = "Cumulative %")) +
+  labs(x = NULL, y = "Density (stems/ha)") +
+  theme_caitlin() + 
+  theme(legend.position= "none") +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "ponderosa pine", hjust= 0)
+pipo_plot
+pipo_plot <- ggplotGrob(pipo_plot)
+currentDate <- Sys.Date()
+ggsave(paste0("estab_pipo_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+###PSME########################################################################
+# PSME 
+data <- data.orig[which(data.orig$spp == "PSME"),]
+data <- left_join(all_yrs, data, by = "estab_yr")
+data$tpha.new[which(is.na(data$tpha.new))] <- 0
+cumscaled <- (cumsum(data$tpha.new)/sum(data$tpha.new)) * (max(data$tpha.new) * 1.05)
+psme_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(width = 0.95) + 
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) +
+  scale_fill_gradientn(colors=c("sandybrown", "white", "skyblue"),
+                       values = c(0,0.5,1), 
+                       guide = "colourbar",
+                       name = "SPEI",
+                       limits = c(-1.5, 1.5),
+                       breaks = c(-1.5, 0, 1.5),
+                       labels = c(-1.5, 0, 1.5)) +
+  geom_line(aes(y = cumscaled, group =1), linetype = 1, size = 1) +
+  scale_x_discrete(expand = c(0, 0), drop=FALSE, labels = data$estab_yr) +
+  scale_y_continuous(expand = c(0,0), # 
+                     limits = c(-(0.05*max(data$tpha.new)),
+                                max(data$tpha.new) * 1.15),
+                     sec.axis = sec_axis(~./(max(data$tpha.new) * 1.05/100), name = "Cumulative %")) +
+  labs(x = NULL, y = "Density (stems/ha)") +
+  theme_caitlin() + 
+  theme(legend.position= "none") +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "Douglas-fir", hjust= 0)
+psme_plot
+temp <- psme_plot
+psme_plot <- ggplotGrob(psme_plot)
+currentDate <- Sys.Date()
+ggsave(paste0("estab_psme_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+dev.off()
+
+###LEGEND########################################################################
+# Dummy plot to get legend
+leg_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
+  geom_col(aes(y = -(0.05*max(data$tpha.new)), fill = var), width = 1) +
+  scale_fill_gradientn(colors=c("sandybrown", "white", "skyblue"),
+                       values = c(0,0.5,1), 
+                       guide = "colourbar",
+                       name = "SPEI",
+                       limits = c(-1.5, 1.5),
+                       breaks = c(-1.5, 0, 1.5),
+                       labels = c(-1.5, 0, 1.5)) +
+  theme(legend.direction = "horizontal")
+        
+leg_plot
+
+#Extract Legend 
+g_legend<-function(a.gplot){
+  tmp <- ggplot_gtable(ggplot_build(a.gplot))
+  leg <- which(sapply(tmp$grobs, function(x) x$name) == "guide-box")
+  legend <- tmp$grobs[[leg]]
+  return(legend)}
+
+legend <- g_legend(leg_plot)
+dev.off()
+grid.draw(legend)
+
+```
+
+
+```{r PLOT ALL TOGETHER NOW}
+# PLOT ALL TOGETHER NOW
+
+# install.packages("gridExtra")
+library(gridExtra)
+# https://cran.r-project.org/web/packages/gridExtra/vignettes/arrangeGrob.html
+?grid.arrange
+
+# png('test.png',
+#      width=1105,
+#      height=791)
+# grid.arrange(abla_plot, laoc_plot, pico_plot, pien_plot, pipo_plot, psme_plot,
+#              ncol = 2)
+# dev.off()
+# ^ Recall all are saved as graphical objects (Grob) or else they get re-drawn each time,
+# which results in loss of individual axes and cumulative lines.
+# But how do I draw in the legend??
+
+# Some suggest switching to more powerful gtable
+library(gtable)
+lh <- rbind(abla_plot, laoc_plot, pico_plot, size = "first")
+rh <- rbind(pien_plot, pipo_plot, psme_plot, size = "first")
+g <- cbind(lh, rh, size = "first")
+grid.newpage()
+grid.draw(g)
+
+# grid.arrange(g, legend, ncol = 1) # legend space is way too big
+library(cowplot)
+currentDate <- Sys.Date()
+png(paste0("estab_all_spei_amjj_",currentDate,".png"),
+    width=900, height =643)
+plot_grid(g, legend, ncol = 1, align = "v", rel_heights = c(3, 0.25))
+dev.off()
+
+
+
+
+# To use below, need to NOT change to Grobs. But then axes are messed again. >:(
+# I'm sure I could pull legend before changing to Grob but moving on...
+# grid_arrange_shared_legend <- function(...) {
+#     plots <- list(...)
+#     g <- ggplotGrob(plots[[1]] + theme(legend.position="bottom"))$grobs
+#     legend <- g[[which(sapply(g, function(x) x$name) == "guide-box")]]
+#     lheight <- sum(legend$height)
+#     grid.arrange(
+#         do.call(arrangeGrob, lapply(plots, function(x)
+#             x + theme(legend.position="none"))),
+#         legend,
+#         ncol = 1,
+#         heights = unit.c(unit(1, "npc") - lheight, lheight))
+# }
+# 
+# grid_arrange_shared_legend(abla_plot, laoc_plot, pico_plot, pien_plot, pipo_plot, psme_plot)
+
+
+# Alt, if I need to better algin axes
+# if(!require(devtools)) install.packages("devtools")
+# devtools::install_github("kassambara/ggpubr")
+# library(ggpubr)
+# ggarrange(abla_plot, laoc_plot, pico_plot, pien_plot, pipo_plot, psme_plot,
+#           # labels = c("A", "B", "C", "D", "e", "F"),
+#           ncol = 2, nrow = 3)
+
+
+# Try multiplot (which is a function I had to define)
+# multiplot(abla_plot, laoc_plot, pico_plot, pien_plot, pipo_plot, psme_plot, cols = 2)
+
+# Alt lines, but they'll bow below zero and above max:
+  # geom_smooth(aes(y=cumsum(tpha.new), group = 1), # 1 group only
+  # se=FALSE, method= "loess", # no SE bands, use local regression smoother
+  # span = 0.75) + # span controls the wiggliness: fraction of pts used to fit
+
+```
+
+
+```{r ESTAB YR VS CLIMATE PREP}
+# N.b., to use the climate data below, can't have run ClimGrwthCORR b/c it drops some yrs.
+# Plan: identify significant correlations for current and future months.
+# But only use estab yr histograms with growing season drougtht bars below for display.
+# N.b., I'm including all of the newly aged juveniles (per procedure above)
+
+source("Tripod_01g_ClimateData.v2.R")
+
+wwdt_temp <- wwdt_temp %>%
+  mutate(next01 = lead(m01, 1),
+         next02 = lead(m02, 1),
+         next03 = lead(m03, 1),
+         next04 = lead(m04, 1),
+         next05 = lead(m05, 1),
+         next06 = lead(m06, 1),
+         next07 = lead(m07, 1),
+         next08 = lead(m08, 1),
+         next09 = lead(m09, 1),
+         next10 = lead(m10, 1),
+         next11 = lead(m11, 1),
+         next12 = lead(m12, 1)) 
+rownames(wwdt_temp) <- c(2006:2016) # lost rownames in last move
+
+wwdt_precip <- wwdt_precip %>%
+  mutate(next01 = lead(m01, 1),
+         next02 = lead(m02, 1),
+         next03 = lead(m03, 1),
+         next04 = lead(m04, 1),
+         next05 = lead(m05, 1),
+         next06 = lead(m06, 1),
+         next07 = lead(m07, 1),
+         next08 = lead(m08, 1),
+         next09 = lead(m09, 1),
+         next10 = lead(m10, 1),
+         next11 = lead(m11, 1),
+         next12 = lead(m12, 1)) 
+rownames(wwdt_precip) <- c(2006:2016) # lost rownames in last move
+
+
+wwdt_spei <- wwdt_spei %>%
+  mutate(next01 = lead(m01, 1),
+         next02 = lead(m02, 1),
+         next03 = lead(m03, 1),
+         next04 = lead(m04, 1),
+         next05 = lead(m05, 1),
+         next06 = lead(m06, 1),
+         next07 = lead(m07, 1),
+         next08 = lead(m08, 1),
+         next09 = lead(m09, 1),
+         next10 = lead(m10, 1),
+         next11 = lead(m11, 1),
+         next12 = lead(m12, 1)) 
+rownames(wwdt_spei) <- c(2006:2016) # lost rownames in last move
+
+year <- c("2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015")
+temp <- wwdt_temp[year,]
+precip <- wwdt_precip[year,]
+spei <- wwdt_spei[year,]
+
+#ABLA
+abla <- data.orig %>%
+  filter(spp == "ABLA")
+abla$estab_yr <- as.numeric(as.character(abla$estab_yr))
+abla <- as.data.frame(abla)
+abla <- abla %>%
+  add_row(estab_yr = 2006, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2007, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2008, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2010, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2012, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2013, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2014, spp = "ABLA", tpha.new = 0) %>%
+  add_row(estab_yr = 2015, spp = "ABLA", tpha.new = 0) %>%
+  arrange(estab_yr)
+
+#LAOC
+laoc <- data.orig %>%
+  filter(spp == "LAOC")
+laoc$estab_yr <- as.numeric(as.character(laoc$estab_yr))
+laoc <- as.data.frame(laoc)
+laoc <- laoc %>%
+  add_row(estab_yr = 2006, spp = "LAOC", tpha.new = 0) %>%
+  add_row(estab_yr = 2007, spp = "LAOC", tpha.new = 0) %>%
+  add_row(estab_yr = 2008, spp = "LAOC", tpha.new = 0) %>%
+  arrange(estab_yr)
+
+
+#PICO
+pico <- data.orig %>%
+  filter(spp == "PICO")
+pico$estab_yr <- as.numeric(as.character(pico$estab_yr))
+pico <- as.data.frame(pico)
+
+
+#PIEN
+pien <- data.orig %>%
+  filter(spp == "PIEN")
+pien$estab_yr <- as.numeric(as.character(pien$estab_yr))
+pien <- as.data.frame(pien)
+pien <- pien %>%
+  add_row(estab_yr = 2006, spp = "PIEN", tpha.new = 0) %>%
+  add_row(estab_yr = 2007, spp = "PIEN", tpha.new = 0) %>%
+  add_row(estab_yr = 2013, spp = "PIEN", tpha.new = 0) %>%
+  arrange(estab_yr)
+
+
+#PIPO
+pipo <- data.orig %>%
+  filter(spp == "PIPO")
+pipo$estab_yr <- as.numeric(as.character(pipo$estab_yr))
+pipo <- as.data.frame(pipo)
+
+
+#PSME
+psme <- data.orig %>%
+  filter(spp == "PSME")
+psme$estab_yr <- as.numeric(as.character(psme$estab_yr))
+psme <- as.data.frame(psme)
+psme <- psme %>% add_row(estab_yr = 2006,
+                         spp = "PSME",
+                         tpha.new = 0) %>%
+  arrange(estab_yr)
+
+```
+
+
+```{r ESTAB YR VS CLIMATE CORR TEST}
+# Pull correlation test values out for each spp, for each climate var, for each month
+
+# create empty vectors to fill
+spp <- NULL
+var.names <- NULL
+cors <- NULL
+ps <- NULL
+ts <- NULL
+dfs <- NULL
+months <- NULL
+
+# Pick variable and set so that loop is easy to re-run.
+# Can keep adding on to the above vectors then combine all
+year <- c("2006", "2007", "2008", "2009", "2010", "2011", "2012", "2013", "2014", "2015")
+var1 <- wwdt_temp[year,] ; var1.name <- "temp"
+var2 <- wwdt_precip[year,] ; var2.name <- "precip"
+var3 <- wwdt_spei[year,] ; var3.name <- "spei"
+
+# data <- abla
+# data <- laoc
+# data <- pico
+# data <- pien
+# data <- pipo
+data <- psme
+
+month.loop.ready <- c(1:24)
+for(j in month.loop.ready){
+
+  data$spp <- as.character(data$spp)
+  
+  correlation <- cor.test(data[,"tpha.new"], var1[,j]) # Pearson
+  sp <- data[1,"spp"] ; spp <- c(spp, sp) # grab the species name
+  var.names <- c(var.names, var1.name)
+  month <- colnames(var1[j]) ; months <- c(months, month)
+  cor <-correlation$estimate ; cors <- c(cors, cor) 
+  p <-correlation$p.value ; ps <- c(ps, p)
+  df<- correlation$parameter ; dfs<-c(dfs,df)
+  t<-correlation$statistic ;  ts<-c(ts, t)
+
+  correlation <- cor.test(data[,"tpha.new"], var2[,j]) 
+  sp <- paste0(data[1,2]) ; spp <- c(spp, sp) # grab the species name
+  var.names <- c(var.names, var2.name)
+  month <- colnames(var2[j]) ; months <- c(months, month)
+  cor <-correlation$estimate ; cors <- c(cors, cor) 
+  p <-correlation$p.value ; ps <- c(ps, p)
+  df<- correlation$parameter ; dfs<-c(dfs,df)
+  t<-correlation$statistic ;  ts<-c(ts, t)
+
+  correlation <- cor.test(data[,"tpha.new"], var3[,j]) 
+  sp <- paste0(data[1,2]) ; spp <- c(spp, sp) # grab the species name
+  var.names <- c(var.names, var3.name)
+  month <- colnames(var3[j]) ; months <- c(months, month)
+  cor <-correlation$estimate ; cors <- c(cors, cor) 
+  p <-correlation$p.value ; ps <- c(ps, p)
+  df<- correlation$parameter ; dfs<-c(dfs,df)
+  t<-correlation$statistic ;  ts<-c(ts, t)
+}
+
+
+
+###################################################################
+### ONLY MAKE NEW DATAFRAME AFTER RUNNING ALL DESIRED VARIABLES ###
+sp <- spp
+var <- var.names
+month <- months
+cor <- cors
+p.value <- ps
+dfs <- dfs
+t.stat <- ts
+all_corrs <- data.frame(sp, var, month, cor, p.value, dfs, t.stat)
+
+write.csv(all_corrs, "correlations.spp.estabyr.csv")
+# ^ should really consider dropping ABLA, LAOC, PIEN (lotsa zeros)
+
+library(corrplot)
+cor <- cor(abla[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(laoc[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(pico[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(pien[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(pipo[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(psme[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+```
+
+
+
+
+```{r TESTING GROUNDS -- DOES NEXT YEAR MATTER???}
+
+source("Tripod_01g_ClimateData.v2.R")
+
+wwdt_temp <- wwdt_temp %>%
+  mutate(next01 = lead(m01, 1),
+         next02 = lead(m02, 1),
+         next03 = lead(m03, 1),
+         next04 = lead(m04, 1),
+         next05 = lead(m05, 1),
+         next06 = lead(m06, 1),
+         next07 = lead(m07, 1),
+         next08 = lead(m08, 1),
+         next09 = lead(m09, 1),
+         next10 = lead(m10, 1),
+         next11 = lead(m11, 1),
+         next12 = lead(m12, 1)) 
+rownames(wwdt_temp) <- c(2006:2016) # lost rownames in last move
+
+wwdt_precip <- wwdt_precip %>%
+  mutate(next01 = lead(m01, 1),
+         next02 = lead(m02, 1),
+         next03 = lead(m03, 1),
+         next04 = lead(m04, 1),
+         next05 = lead(m05, 1),
+         next06 = lead(m06, 1),
+         next07 = lead(m07, 1),
+         next08 = lead(m08, 1),
+         next09 = lead(m09, 1),
+         next10 = lead(m10, 1),
+         next11 = lead(m11, 1),
+         next12 = lead(m12, 1)) 
+rownames(wwdt_precip) <- c(2006:2016) # lost rownames in last move
+
+
+wwdt_spei <- wwdt_spei %>%
+  mutate(next01 = lead(m01, 1),
+         next02 = lead(m02, 1),
+         next03 = lead(m03, 1),
+         next04 = lead(m04, 1),
+         next05 = lead(m05, 1),
+         next06 = lead(m06, 1),
+         next07 = lead(m07, 1),
+         next08 = lead(m08, 1),
+         next09 = lead(m09, 1),
+         next10 = lead(m10, 1),
+         next11 = lead(m11, 1),
+         next12 = lead(m12, 1)) 
+rownames(wwdt_spei) <- c(2006:2016) # lost rownames in last move
+
+
+
+cor <- cor(abla[,"tpha.new"], wwdt_temp[year,]) %>% corrplot
+cor <- cor(laoc[,"tpha.new"], wwdt_temp[year,]) %>% corrplot
+cor <- cor(pico[,"tpha.new"], wwdt_temp[year,]) %>% corrplot
+cor <- cor(pien[,"tpha.new"], wwdt_temp[year,]) %>% corrplot
+cor <- cor(pipo[,"tpha.new"], wwdt_temp[year,]) %>% corrplot
+cor <- cor(psme[,"tpha.new"], wwdt_temp[year,]) %>% corrplot
+
+cor <- cor(abla[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(laoc[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(pico[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(pien[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(pipo[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+cor <- cor(psme[,"tpha.new"], wwdt_precip[year,]) %>% corrplot
+
+cor <- cor(abla[,"tpha.new"], wwdt_spei[year,]) %>% corrplot
+cor <- cor(laoc[,"tpha.new"], wwdt_spei[year,]) %>% corrplot
+cor <- cor(pico[,"tpha.new"], wwdt_spei[year,]) %>% corrplot
+cor <- cor(pien[,"tpha.new"], wwdt_spei[year,]) %>% corrplot
+cor <- cor(pipo[,"tpha.new"], wwdt_spei[year,]) %>% corrplot
+cor <- cor(psme[,"tpha.new"], wwdt_spei[year,]) %>% corrplot
+
+```

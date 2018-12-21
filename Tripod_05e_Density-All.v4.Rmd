@@ -1,0 +1,237 @@
+---
+title: "DENSITY"
+author: "CaitLittlef"
+date: "May 22, 2017"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+### NOTES
+Must run Tripod_00_Main.R (and sourced codes therein) before proceeding!
+
+N.b., skipping Poisson b/c of overdispersion & going right to negative binomial GLM. Skipping quantile regression b/c impossible to interpret.
+
+Re: fitting models
+A SATURATED MODEL assumes each data pt has own parameters (i.e., there are n parameters to estimate). A NULL MODEL assumes exact "opposite" - assumes 1 parameter for all data points, so you only estiamte 1. A PROPOSED MODEL assumes I can explain data pts with p parameters + an intercept term, so I have p+1 parameters. If NULL DEVIANCE is really small, NULL MODEL explains data well (i.e., with nothing but an intercept -- just the average of the response). Same w/ RESIDUAL DEVIANCE: how well model w/ predictors predict responses. Increase in deviance shows lack of fit. Remember, df = # obs - # predictors. df are # of independent pieces of info that go into estimate of a parameter. In gen, df of an estimate of a parameter equals # independent scores that go into estimate minus # of parameters used as intermediate steps in the estimate of the parameter itself. Goodness of fit tests H0: model fits vs. HA: model doesn't fit -- i.e., incorrectly specified. To calculate p-value for deviance GOF test, calculate probability to the right of the deviance value for the chi-squared distribution on model df -- this is OK for neg bin b/c neg bin has Poisson nested inside (same structure) plus extra parameter to model the over-dispersion.
+
+### SET-UP
+```{r TWEAKS}
+
+data <- spp_sum
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(2, 5, 6, 7, 9, 10, 15)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha) # add site back on
+data <- data[, c(8,9,2,3,4,5,6,1,7)] # re-order
+remove(var.scale)
+
+```
+
+
+### NEGATIVE BINOMIAL
+```{r NEGATIVE BINOMIAL}
+
+# MODEL (Negative binomial includes overdispersion (see theta parameter))
+library(MASS)
+model.nb = glm.nb(tpha ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + min_live_seed_dist,
+                  data = data,
+                  maxit=100)
+summary(model.nb)
+
+model.nb.step <- stepAIC(model.nb, direction = "backward", scope = .~.^2)
+# AIC value itself isn't meaningful (e.g,. compared to R^2), but relative values are.
+# AIC balances trade-off between the goodness of fit of the model and the simplicity of the model.
+summary(model.nb.step)
+(est.nb.step <- cbind(Estimate = coef(model.nb.step), confint(model.nb.step)))
+
+# Un-scaled version for interpretation of incremental changes to covariates.
+model.nb.step.raw = glm.nb(tpha ~ shrub_perc + min_live_seed_dist,
+                           data = data.raw,
+                           maxit = 100)
+summary(model.nb.step)
+(est.nb.step.raw <- cbind(Estimate = coef(model.nb.step.raw), confint(model.nb.step.raw)))
+# Remember, in this model, there's a multiplicative relationship btwn x & y.
+# These coefficients have an ADDITIVE effect when in the ln(y) scale...
+#...and a MULTIPLICATIVE effect in y scale. So, exponentiating won't give...
+# simple "for every unit increaese in min_live_seed_dist, I get 10x more tpha".
+# Instead, for one unit increase in seed dist, tpha will be * by exp(-0.01038749)=0.9896663
+# Exponentiating coefficients gives Incident Rate Ratios.
+exp(est.nb.step.raw)
+#                        Estimate        2.5 %       97.5 %
+# (Intercept)        1.840908e+04 8848.3952217 4.048252e+04
+# shrub_perc         6.517006e-02    0.0176260 2.482590e-01
+# min_live_seed_dist 9.896663e-01    0.9813415 9.993233e-01 <-- 0.9896663 * original outcome...
+# (...i.e., prior to adding one additional unit of min_live_seed_dist.)
+# So, every increase in min_live_seed_dist results in 2% decrease tpha.
+```
+
+```{r testing zone}
+# RESID DIAGNOSTICS (stats consulting folks say deviance resids (default) vs. Pearsons are fine)
+# Again, not going for hypothesis testing or prediction, so quick viz assessment fine.
+# Resid versus fitted values (i.e., estimated/predicted response vs. observed values).
+# Residuals are unpredictable component of the associated observation.
+# If pattern observed in fitted vs. resid, may be HETEROSCEDASTICITY (i.e., non-constant variance in resids)
+
+par(mfrow=c(1,3))
+# 1
+plot(fitted(model.nb.step), residuals(model.nb.step)) # defaults to devaince vs. type = "Pearson"
+title("Residual vs. Fitted Value Plot") # expect no pattern; n.b., resids < 0 for lrg values
+# 2
+plot(data$tpha, residuals(model.nb.step))
+title("Residuals vs. Observed Values Plot") # here, expect correlation... WHY?
+# Plot shows positive residuals for large values and negative residuals for small values.
+# Residuals are bit that's left when I subtract predicted from observed.
+# I'd expect model to predict more moderate values than the actual observed values.
+# (i.e., slightly lower predicted than upper observed...
+# ...slightly higher predidcted than lower observed).
+# 3
+plot(data$min_live_seed_dist, residuals(model.nb.step))
+title("Residuals vs. Predictor") # If pattern, relationship may be nonlinear
+
+
+# R's BUILT-IN DIAGNOSTICS
+# http://data.library.virginia.edu/diagnostic-plots/
+par(mfrow=c(2,2))
+plot(model.nb.step) # R very kindly spits out built-in diagnostics (but I don't get predicted values on x axis...)
+# 1) Resid vs. fitted: expect equally spread resids around horiz line w/o distinct pattern.
+# 2) Normal Q-Q: expect resids lined well on straight-line
+# 3) Scale-location: spread equally along range of predictors? This checks assumption of = variance. Want the overlaid lowess curve to be flat.
+# ... i.e., homoscedasticity. Should see horizontal line w/ equally (random) spread points
+# 4) Resid vs. leverage: are there influential cases? Upper right & lower right have high Cooks distance
+# ... regression will be altered if we exclude these cases that have high Cooks distance scores.
+# Datapoints that are towards extreme will push/pull harder on lever (i.e., regression line).
+# Cooks says how far predicted values for data would move if model fitted WITHOUT datapt in question.
+par(mfrow=c(1,1))
+dev.off()
+
+# tiff(filename = "fit.v.obs_all.tif",
+#      width = 4, height = 4, units = "in", res = 200)
+plot(data$tpha, fitted(model.nb.step),
+     xlab = "observed values",
+     ylab = "fitted values")
+dev.off()
+
+```
+
+```{r EXCLUDE OUTLIERS}
+# # Based on diagnostic plots above, sites that have largest Cook's distance...
+# # ...and/or skew off of Normal Q-Q line warrant further examination.
+# # So do sites that just visually pop out (e.g., 2nd largest TPHA S-322-575)
+# #
+# # spp_sum$tpha[which(spp_sum$site == "S-233-346",)] # 29234 # largest
+# # spp_sum$tpha[which(spp_sum$site == "S-312-452",)] # 13216 ; 105 dist -- middle of nowhere plot
+# # spp_sum$tpha[which(spp_sum$site == "S-231-268",)] # 102; 30 dist -- no idea why pulled out
+# # spp_sum$tpha[which(spp_sum$site == "S-130-076",)] # 14218 ; 33 dist -- no idea why pulled out
+# # spp_sum$tpha[which(spp_sum$site == "S-322-575",)] # 21581 # second largest
+#
+# # Across 4 plots in R's built-in diagnostics above, 346 and 452 are weirdest
+
+# data.x346 <- (data[!(data$site == "S-233-346"),]) # Biggest
+# data.x346x452 <- (data.x346[!(data.x346$site == "S-312-452"),]) # Biggest & middle-of-nowhere
+# data.x452 <- (data[!(data$site == "S-312-452"),]) # Middle-of-nowhere
+# #
+# model.nb.step.x346 = glm.nb(tpha ~ min_live_seed_dist + shrub_perc, data = data.x346, maxit = 100)
+# summary(model.nb.step.x346)
+# #
+# model.nb.step.x346x452 = glm.nb(tpha ~ min_live_seed_dist + shrub_perc, data = data.x346x452, maxit = 100)
+# summary(model.nb.step.x346x452)
+# #
+# model.nb.step.x452 = glm.nb(tpha ~ min_live_seed_dist + shrub_perc, data = data.x452, maxit = 100)
+# summary(model.nb.step.x452) # More significance.
+# #
+# AIC(model.nb, model.nb.step, model.nb.step.x346, model.nb.step.x346x452, model.nb.step.x452)
+# x346x452 best... but I don't like all-spp moel anyways, so just include all.
+
+```
+
+
+### NB RESIDUAL SAC
+```{r NB RESIDUAL SAC}
+data$long <- spp_sum$long
+data$lat <- spp_sum$lat
+# Test to see if residuals of my model are spatially autocorrelated
+Moran_space(data, model.nb$residuals)
+Moran_space(data, model.nb.step$residuals)
+# Null is no SAC
+
+# semivariograms
+# ref: http://gsp.humboldt.edu/OLM/R/04_01_Variograms.html
+# ref: https://beckmw.wordpress.com/tag/variogram/
+data$x <- spp_sum$long
+data$y <- spp_sum$lat
+par(mfrow=c(1,1))
+plot(data$x, data$y)
+
+temp <- data.frame(x=data$x, y=data$y, resids=model.nb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+```
+
+
+### FINAL
+```{r FINAL}
+# Final model -- with scaled covariates for easy effect size comparison.
+summary(model.nb.step)
+
+# These values can be useful in in-text description (e.g., "ever m farther, xx% decrease...")
+summary(model.nb.step.raw)
+
+```
+
+
+### FIGURES
+```{r FIGURES}
+
+p1 <- ggplot(spp_sum, aes(x=min_live_seed_dist, y=tpha)) 
+p1 + geom_point(shape = 16, alpha=1/2, size=6,
+                position = position_jitter(width=1,height=1)) +
+  theme_bw() +
+  labs(x = "Distance to live seed source (m)", y="Juvenile density (stems/ha)") +
+  theme(text = element_text(size=16),
+        axis.text.x = element_text(color="black", size=16),
+        axis.text.y = element_text(color="black", size=16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+dev.off()
+
+currentDate <- Sys.Date()
+ggsave(paste0("tpha_vs_seed_dist_spp_",currentDate,".png"), width = 7, height = 5)
+
+
+
+
+
+
+```
+
+```{r testing ground}
+data[which(data$site == "S-123-051"),]
+
+```
+
+
+### TRYING TO RUN MONTE CARLO SIMULATION...
+
+https://www.unc.edu/courses/2010fall/ecol/563/001/docs/lectures/lecture7.htm#NBlogL
+(pearson <- sum((spp_sum$tpha - predict)^2/predict))
+(pearson.p <- 1 - pchisq(pearson, length(spp_sum$tpha) - 1 - 6))
+(chisq.nb <- chisq.test(spp_sum$tpha, p=predict))
+
+plogis(predict.tpha)
+plogis(predict.glm(model.nb))
+(chisq.nb <- chisq.test(spp_sum$tpha, p=plogis(predict.glm(model.nb))))
+https://stackoverflow.com/questions/13327014/predict-probability-using-r
+
+see simulate?
+
+
+          

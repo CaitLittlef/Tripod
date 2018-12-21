@@ -1,0 +1,411 @@
+---
+title: "Tripod_05g_EstabYrFreq"
+author: "CaitLittlef"
+date: "January 29, 2018"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+# If I want to change spp, latest estab yr, number sites, see these lines:
+# 25 (species)
+# 38 (min estab yr)
+# 48 (how many trees per site)
+# 127 change rwl file name 
+# 136 read in rwl
+# 313 change chronology file name
+
+```{r clean, include=FALSE}
+library(dplyr)
+# Quick clean
+# colnames(tripod)
+grwth <- tripod %>%
+  filter(! spp == "SEEDLING") %>% # dropping germinants
+  dplyr::select(-starts_with("ht_"),
+                -starts_with("plot_snags_"),
+                -dem10, -asp10, -asp100, -trasp10, -trasp100,
+                -slp10, -hli10, srad10, srad100, -cti10)
+
+
+# Keep only PICO
+grwth <- grwth %>% filter(spp == "PICO")
+
+# Nix records that won't have any growth measurements.
+grwth <- grwth %>% filter(! is.na(grwth_2016)) 
+
+# I also want to drop any records here that ONLY have growth for 2016.
+# If I were to carry those records along, I'd end up with some that have all NAs...
+# ...when I universally drop 2016 growth on all trees. So, drop those w/o grwth_2015.
+# (N.b., I'm keeping 2016 now so that I have full decade to read into dplR package)
+grwth <- grwth %>% filter(! is.na(grwth_2015)) 
+
+# Here, drop if I only want to keep trees that have established since a given yr.
+grwth <- grwth %>%
+  filter(estab_yr < 2009)
+temp <- grwth %>%
+  dplyr::group_by(site) %>%
+  dplyr::summarize(total.count=n()) %>%
+  as.data.frame() %>%
+  print()
+# And only keep those sitse that have a sufficient number of trees.
+# This number is arbitrary, but I don't want only 1 rep for a site.
+keep <- temp %>%
+  filter(total.count > 9)
+grwth <- grwth[grwth$site %in% keep$site, ]
+remove(keep)
+
+```
+
+
+```{r UNIQUE IDS, include=FALSE}
+library(dplyr)
+# RWL data format requires few digits for series names.
+# So, make ID prefix out of 3 last site numbers (which are unique)
+grwth$IDprefix <- substr(as.character(grwth$site), start = 7, stop = 10)
+
+# Make an ID suffix with unique integers for every record at each site 
+# Problem is, even temporary grouping kicks out my dataframe attributes
+# (hence weird attr(* at end of summary in environment to the right). Preserve them:
+attr <- attributes(grwth)
+grwth <- grwth %>% dplyr::group_by(site) %>% dplyr::mutate(IDsuffix = 1:n())
+attributes(grwth) <- attr ; remove(attr)
+
+# But now IDsuffix has lost its name b/c it wasn't around when I created attr. Remind IDsuffix.
+grwth$IDsuffix <- grwth[,87] ; grwth[,87] <- NULL
+
+# Some (most) of those unique IDs for trees need leading zeros
+grwth$IDsuffix <- grwth$IDsuffix %>%
+  formatC(., width=3, format = "d", flag = "0")
+
+# Combine prefix and suffix for ID to use in the dendro prgm
+grwth$ID <- paste0(grwth$IDprefix, grwth$IDsuffix)
+
+# Create look-up table to rename chronologies with site
+lu.ID <- as.data.frame(grwth) %>%
+  dplyr::select(site, IDprefix) %>%
+  distinct()
+grwth$IDsuffix <- NULL
+grwth$IDprefix <- NULL
+
+```
+
+
+```{r GROWTH CORRELATIONS PREP, include=FALSE}
+
+# refs: https://cran.r-project.org/web/packages/dplR/dplR.pdf
+# refs: https://cran.r-project.org/web/packages/dplR/vignettes/intro-dplR.pdf
+# refs: https://www.treeringsociety.org/resources/SOM/Brewer_Murphy_SupplementaryMaterial.pdf (data )
+
+install.packages("dplR")
+library(dplR)
+
+# Detrending estimates and removes low frequency variability due to biological or stand effects.
+# Done by dividing each series by the growth trend to produce units in the dinemsionless RWI.
+# Need unique ID to organize data by date (2007 at top, 2016 at bottom),,,
+# ...with 1 series (tree) in each column
+
+# Create requisite data format then detrend to get growth indices.
+dataprep <- grwth %>%
+  dplyr::select(ID, starts_with("grwth_20"))
+any(duplicated(dataprep$ID)) # check for dupes (or weird NAs), should be FALSE
+# Assign rowname
+rownames(dataprep) <- dataprep$ID
+dataprep <- dataprep %>% dplyr::select(starts_with("grwth_20"))
+# Keep all rows (incl. 2016) for now b/c need at a decade for data format in dlpR.
+# Drop 2016 later. 
+
+# Tree rings are in mm, so for consistency sake, convert my cm to mm  
+dataprep <- 10*dataprep 
+
+# Now I have df with rownames as unique IDs of tree records and growth.
+# dplR needs transposed df. And dplR needs data as RWL object as well as a dataframe.
+# Growth for each tree (in colums) are the values, yrs as rows (2016 at bottom)
+
+dataprep2 <- as.data.frame(t(dataprep))
+# Rownames are now grwth_2007, etc. but dplR needs them as actual years
+years <- c("2007","2008","2009","2010","2011","2012","2013","2014","2015","2016")
+rownames(dataprep2) <- years ; remove(years)
+
+# Write rwl. If I had dropped 2016 by now, having <10 yrs throws errors/drops datapoints.
+# .rwl name indicates spp, estab in this yr or earlier, min num trees/sites
+# write.rwl(dataprep2, fname = "grwth.PICO.estab08.n10.rwl", format = c("tucson"))
+
+# remove(dataprep, dataprep2)
+```
+
+
+```{r GROWTH CORRELATIONS, include=FALSE}
+data <- read.rwl("grwth.PICO.estab08.n10.rwl", format = c("tucson"))
+class(data) # rwl and data.frame
+rwl.report(data)
+
+# Exclude 2016 grwth (mid-way thru season) so I can proceed with detrend
+data <- data[1:9,] # this excludes 2016
+# data <- data[3:9,] # this excludes 2007, 2008, 2016 
+# Confirm I have no columns that are entirely NAs. Check rows: any NAs? all NAs?
+# (apply(data, 1, function(x) any(is.na(x)))) # There are NAs, but none in 2015 (i.e., FALSE)
+# (apply(data, 1, function(x) all(is.na(x)))) # No, no rows are entirely NA
+# (apply(data, 2, function(x) any(is.na(x)))) # I see some falses -- reasonable.
+# logic <- (apply(data, 2, function(x) all(is.na(x)))) # There are 0 TRUES, which means no tree is empty.
+# length(which(logic)) # give the number of trues
+
+# Prior trial and error (.v3) showed that, given increase in values in series (unlike tree rings)...
+# dplR was applying MEAN for detrending when it saw that positive slope not neg exp model.
+# To ensure that at least a linear model gets fit (neg exp --> linear if can't fit neg exp)...
+# I need to tell dplR to be comfortable with positive slopes. pos.slope = TRUE
+# N.b., neg exp won't be fit if function is non-decreasing.
+
+# Create ring-width index: avoid mean b/c of upward trend (see scatter plots).
+grwth.lm.rwi <- detrend(rwl = data,method = "ModNegExp",
+                             pos.slope = TRUE, verbose = TRUE)
+# grwth.lm.rwi.0915
+# If I were to turn on verbose = TRUE I'd see that all are linear models, not neg exp)
+
+
+# Now, build a chronology by averaging across yrs of the rwi object.
+grwth.lm.chron <- chron(grwth.lm.rwi) ; grwth.lm.chron # <--- all sites
+
+# Sampling depth really drops off before 2010.
+# Note that the defauls is a Tukey biweight robust mean (unaffected by outliers).
+# This is the so-called standard chronology, hence the "std" suffix.
+#         xxxstd samp.depth
+# 2007 1.0463726         27
+# 2008 1.0265535         61
+# 2009 1.0026653        173
+# 2010 1.0013197        212
+# 2011 1.1000967        214
+# 2012 0.9418329        214
+# 2013 0.8452318        215
+# 2014 1.0643115        215
+# 2015 1.0177896        215
+
+# ALTERNATIVE LOOKS:
+# See one series with all the possible splines:
+colnames(grwth.lm.rwi) # to see some column names
+grwth.lm.rwi.0915[, "257004"]
+series <- data[, "257001"] # extracts a given series
+names(series) <- rownames(data) # gives yrs as rownames
+series.rwi <- detrend.series(y = series, y.name = "257001",
+                             pos.slope = TRUE,
+                             verbose = TRUE)
+temp <- data %>%
+  dplyr::select(starts_with("323"))
+# write.csv(temp, "test_raw.csv")
+temp <- grwth.lm.rwi %>%
+  dplyr::select(starts_with("323"))
+# write.csv(temp, "test_rwi.csv")
+temp <- chron(temp)
+# write.csv(temp, "test_chron.csv")
+
+# Alt visual:
+# crn.plot(grwth.lm.chron, add.spline = FALSE) # grey background gives sampling depth
+
+```
+
+
+```{r CHRONOLOGY EACH SITE, include=FALSE}
+
+# Create repository list for chrons & sample depth.
+# List is a good option if length is unknown / may have skips.
+list.site.prefix <- list()
+list.chron.07 <- list()
+list.sampd.07 <- list()
+list.chron.08 <- list()
+list.sampd.08 <- list()
+list.chron.09 <- list()
+list.sampd.09 <- list()
+list.chron.10 <- list()
+list.sampd.10 <- list()
+list.chron.11 <- list()
+list.sampd.11 <- list()
+list.chron.12 <- list()
+list.sampd.12 <- list()
+list.chron.13 <- list()
+list.sampd.13 <- list()
+list.chron.14 <- list()
+list.sampd.14 <- list()
+list.chron.15 <- list()
+list.sampd.15 <- list()
+
+# Grab prefix of each record, which corresponds to each site (now columns)
+prefix <- colnames(grwth.lm.rwi)
+prefix <- prefix %>% substr(start = 1, stop = 3)
+prefix <- unique(prefix) # just keep one of each (remove duplicates)
+length(prefix) # There are 31 series
+loop.ready <- c(1:length(prefix))
+
+# LOOP
+
+for(i in loop.ready){
+
+series <- dplyr::select(grwth.lm.rwi, starts_with(prefix[i])) # grwth.lm.rwi.0915
+chron <- chron(series)
+
+# list.site.prefix[[i]] <- prefix[i]
+# list.chron.07[[i]] <- round(as.numeric(chron[1,1]),4)
+# list.sampd.07[[i]] <- as.integer(chron[1,2])
+# list.chron.08[[i]] <- round(as.numeric(chron[2,1]),4)
+# list.sampd.08[[i]] <- as.integer(chron[2,2])
+# list.chron.09[[i]] <- round(as.numeric(chron[3,1]),4)
+# list.sampd.09[[i]] <- as.integer(chron[3,2])
+# list.chron.10[[i]] <- round(as.numeric(chron[4,1]),4)
+# list.sampd.10[[i]] <- as.integer(chron[4,2])
+# list.chron.11[[i]] <- round(as.numeric(chron[5,1]),4)
+# list.sampd.11[[i]] <- as.integer(chron[5,2])
+# list.chron.12[[i]] <- round(as.numeric(chron[6,1]),4)
+# list.sampd.12[[i]] <- as.integer(chron[6,2])
+# list.chron.13[[i]] <- round(as.numeric(chron[7,1]),4)
+# list.sampd.13[[i]] <- as.integer(chron[7,2])
+# list.chron.14[[i]] <- round(as.numeric(chron[8,1]),4)
+# list.sampd.14[[i]] <- as.integer(chron[8,2])
+# list.chron.15[[i]] <- round(as.numeric(chron[9,1]),4)
+# list.sampd.15[[i]] <- as.integer(chron[9,2])
+
+# If excluding 07 and 08, use this:
+list.site.prefix[[i]] <- prefix[i]
+list.chron.09[[i]] <- round(as.numeric(chron[1,1]),4)
+list.sampd.09[[i]] <- as.integer(chron[1,2])
+list.chron.10[[i]] <- round(as.numeric(chron[2,1]),4)
+list.sampd.10[[i]] <- as.integer(chron[2,2])
+list.chron.11[[i]] <- round(as.numeric(chron[3,1]),4)
+list.sampd.11[[i]] <- as.integer(chron[3,2])
+list.chron.12[[i]] <- round(as.numeric(chron[4,1]),4)
+list.sampd.12[[i]] <- as.integer(chron[4,2])
+list.chron.13[[i]] <- round(as.numeric(chron[5,1]),4)
+list.sampd.13[[i]] <- as.integer(chron[5,2])
+list.chron.14[[i]] <- round(as.numeric(chron[6,1]),4)
+list.sampd.14[[i]] <- as.integer(chron[6,2])
+list.chron.15[[i]] <- round(as.numeric(chron[7,1]),4)
+list.sampd.15[[i]] <- as.integer(chron[7,2])
+
+
+}
+
+# Turn those lists into matrices. t transposes.
+# N.b., if I had any NULLs (e.g., didn't have sequential i's)...
+# ...so set any NULLS in list to NA so they don't disappear. Like this:
+# list.park.name <- sapply(list.park.name, function(x) ifelse(x == "NULL", NA, x))
+
+# Note plyr, dplyr order may get funky here. May need to re-load plyr.
+# Alt code: chron.07 <- do.call(rbind,list.chron.07)
+site.prefix <- (plyr::rbind.fill.matrix(lapply(list.site.prefix, t)))
+chron.07 <- (plyr::rbind.fill.matrix(lapply(list.chron.07, t)))
+sampd.07 <- (plyr::rbind.fill.matrix(lapply(list.sampd.07, t)))
+chron.08 <- (plyr::rbind.fill.matrix(lapply(list.chron.08, t)))
+sampd.08 <- (plyr::rbind.fill.matrix(lapply(list.sampd.08, t)))
+chron.09 <- (plyr::rbind.fill.matrix(lapply(list.chron.09, t)))
+sampd.09 <- (plyr::rbind.fill.matrix(lapply(list.sampd.09, t)))
+chron.10 <- (plyr::rbind.fill.matrix(lapply(list.chron.10, t)))
+sampd.10 <- (plyr::rbind.fill.matrix(lapply(list.sampd.10, t)))
+chron.11 <- (plyr::rbind.fill.matrix(lapply(list.chron.11, t)))
+sampd.11 <- (plyr::rbind.fill.matrix(lapply(list.sampd.11, t)))
+chron.12 <- (plyr::rbind.fill.matrix(lapply(list.chron.12, t)))
+sampd.12 <- (plyr::rbind.fill.matrix(lapply(list.sampd.12, t)))
+chron.13 <- (plyr::rbind.fill.matrix(lapply(list.chron.13, t)))
+sampd.13 <- (plyr::rbind.fill.matrix(lapply(list.sampd.13, t)))
+chron.14 <- (plyr::rbind.fill.matrix(lapply(list.chron.14, t)))
+sampd.14 <- (plyr::rbind.fill.matrix(lapply(list.sampd.14, t)))
+chron.15 <- (plyr::rbind.fill.matrix(lapply(list.chron.15, t)))
+sampd.15 <- (plyr::rbind.fill.matrix(lapply(list.sampd.15, t)))
+
+
+# Create a dataframe.
+df.chron <- data.frame(cbind(site.prefix, chron.07, chron.08, chron.09, chron.10,
+                             chron.11, chron.12, chron.13, chron.14, chron.15,
+                             sampd.07, sampd.08, sampd.09, sampd.10,
+                             sampd.11, sampd.12, sampd.13, sampd.14, sampd.15))
+# df.chron <- data.frame(cbind(site.prefix, chron.09, chron.10,
+#                              chron.11, chron.12, chron.13, chron.14, chron.15,
+#                              sampd.09, sampd.10,
+#                              sampd.11, sampd.12, sampd.13, sampd.14, sampd.15))
+
+# Rename from general X.1, X.2, X.3 variable names
+df.chron <- df.chron %>%
+  dplyr::rename_(IDprefix = names(.)[1], # So I can join back to full dataset
+                 yr2007 = names(.)[2], # can't use num, so add prefix 
+                 yr2008 = names(.)[3],
+                 yr2009 = names(.)[4],
+                 yr2010 = names(.)[5], yr2011 = names(.)[6],
+                 yr2012 = names(.)[7], yr2013 = names(.)[8],
+                 yr2014 = names(.)[9], yr2015 = names(.)[10], 
+                 sampd.07 = names(.)[11],
+                 sampd.08 = names(.)[12],
+                 sampd.09 = names(.)[13],
+                 sampd.10 = names(.)[14], sampd.11 = names(.)[15],
+                 sampd.12 = names(.)[16], sampd.13 = names(.)[17],
+                 sampd.14 = names(.)[18], sampd.15 = names(.)[19])
+
+# Use this if excluding first few yrs:
+# df.chron <- df.chron %>%
+#   dplyr::rename_(IDprefix = names(.)[1], # So I can join back to full dataset
+#                  yr2009 = names(.)[2], # can't use num, so add prefix
+#                  yr2010 = names(.)[3],
+#                  yr2011 = names(.)[4],
+#                  yr2012 = names(.)[5],
+#                  yr2013 = names(.)[6],
+#                  yr2014 = names(.)[7],
+#                  yr2015 = names(.)[8],
+#                  sampd.09 = names(.)[9],
+#                  sampd.10 = names(.)[10],
+#                  sampd.11 = names(.)[11],
+#                  sampd.12 = names(.)[12],
+#                  sampd.13 = names(.)[13],
+#                  sampd.14 = names(.)[14],
+#                  sampd.15 = names(.)[15])
+
+# They're all factors -- I want as numeric for running correlations
+df.chron <- data.frame(lapply(df.chron, function(x) as.numeric(as.character(x))))
+# But changing to numeric drops leading zeros on IDprefix
+df.chron$IDprefix <- df.chron$IDprefix %>%
+  formatC(., width=3, format = "d", flag = "0")
+# ... and I still want that prefix as characters for joining with climate data
+df.chron$IDprefix <- as.character(df.chron$IDprefix)
+
+safe <- df.chron
+
+# Put site names back on
+df.chron <- df.chron %>%
+  left_join(lu.ID, by = "IDprefix") %>% # make sure lu.ID is accurate
+  dplyr::select(-IDprefix) %>% # drop prefix
+  dplyr::select(site, everything()) # reorder: first ID, then site, then everything else
+
+# write.csv(df.chron, "chronologies.lm.PICO.estab08.n5.0915.csv")
+# write.csv(df.chron, "chronologies.lm.PICO.estab08.n5.csv")
+# write.csv(df.chron, "chronologies.lm.PICO.estab09.n3.csv")
+# write.csv(df.chron, "chronologies.lm.PICO.estab09.n5.csv")
+# write.csv(df.chron, "chronologies.lm.PICO.estab07.n5.csv")
+# write.csv(df.chron, "chronologies.lm.PICO.estab07.n3.csv")
+# write.csv(df.chron, "chronologies.lm.PIPO.estab09.n1.csv")
+
+# Tidy up
+remove(list = ls(pattern = "list.")) # ls() gives list of objects that match pattern
+remove(list = ls(pattern = "chron.")) ; remove(list = ls(pattern = "sampd."))
+remove(site.prefix); remove(series); remove(chron) ; remove(i)
+
+```
+
+
+```{r IS THERE A CONSISTENT PATTERN IN INDEX, include=FALSE}
+# Look at the index values over the years -- have I sufficiently detrended them?
+# Or is there still more grwth in the latter years?
+library(dplyr)
+df <- df.chron %>%
+  dplyr::select(c(1:10))
+rownames(df) <- df$site
+df$site <- NULL
+df <- t(df) %>% as.data.frame()
+df$year <- c(2007:2015)
+df <- df %>%
+  gather(key = site, value = index, -year) # don't gather year
+plot(df$index ~ df$year)
+remove(df)
+# ^ No clear increase with age. So I can feel OK about using linear detrend.
+# Lowest grwth is in 2013. What happened that year re: SPEI?
+```
+
+
+# switch to Tripod_05h_ClimGrwthCORR.Rmd
+
+
+
+

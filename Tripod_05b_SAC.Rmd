@@ -1,0 +1,102 @@
+---
+title: "Tripod_05_Explore"
+author: "CaitLittlef"
+date: "170113-"
+output: html_document
+---
+
+##### Must run Tripod_00_Main.R (and sourced codes therein) before proceeding!
+
+### MORANS
+```{r MORANS}
+
+# density.dists <- as.matrix(dist(cbind(spp_sum$long, spp_sum$lat)))
+# density.dists.inv <- 1/density.dists
+# diag(density.dists.inv) <- 0
+# 
+# density.dists.inv[1:5,1:5]
+# 
+# Moran.I(spp_sum$tpha, density.dists.inv)
+
+# wrote function Moran_tpha in Tripod_04_Functions.R
+
+Moran_tpha(spp_sum)
+#Moran_tpha(spp_sum[!(spp_sum$site == "S-312-428" | spp_sum$site == "S-221-211"),])
+
+
+# $observed
+# [1] 0.04367985
+# 
+# $expected
+# [1] -0.02
+# 
+# $sd
+# [1] 0.05525411
+# 
+# $p.value
+# [1] 0.2491195
+
+# Null hypothesis for Morans is that there's zero SAC present in density variable. 
+# In other words, that data are randomly distributed. Based on this result, I cannot
+# reject the null. Distances in site values aren't correlated with distances between
+# site locations (both generated using inverse Euclidean distance matrix...I think.)
+
+Moran_tpha(spp_sum) #p = 0.2491195
+Moran_tpha(abla_sum) #p = 0.3288098
+Moran_tpha(laoc_sum) #p = 0.9515275
+Moran_tpha(pico_sum) #p = 0.1863659
+Moran_tpha(pien_sum) #p = 0.7989738
+Moran_tpha(pipo_sum) #p = 0.07141209 # close, perhaps b/c sites in same elev band closest? 
+Moran_tpha(psme_sum) #p = 0.2691439
+
+# Testing for some sitse that are super close (114m apart)
+Moran_tpha(spp_sum[!(spp_sum$site == "S-312-428" | spp_sum$site == "S-221-211"),]) # 0.2495272
+Moran_tpha(abla_sum[!(abla_sum$site == "S-312-428" | abla_sum$site == "S-221-211"),]) # 0.3288098
+Moran_tpha(laoc_sum[!(laoc_sum$site == "S-312-428" | laoc_sum$site == "S-221-211"),]) # 0.952333
+Moran_tpha(pico_sum[!(pico_sum$site == "S-312-428" | pico_sum$site == "S-221-211"),]) # 0.2569852
+Moran_tpha(pien_sum[!(pien_sum$site == "S-312-428" | pien_sum$site == "S-221-211"),]) # 0.9269855
+Moran_tpha(pipo_sum[!(pipo_sum$site == "S-312-428" | pipo_sum$site == "S-221-211"),]) # 0.126211
+Moran_tpha(psme_sum[!(psme_sum$site == "S-312-428" | psme_sum$site == "S-221-211"),]) # 0.2693823
+
+
+# See some SAC when all sites included, even for spp with minimal representation
+# all all sites. Attributing this spatial pattern to underlying gradients I'm
+# getting at (i.e., elevation)
+# Moran_tpha(abla_sum_all) #p = 0.007270759
+# Moran_tpha(laoc_sum_all) #p = 0.2418092
+# Moran_tpha(pico_sum_all) #p = 0.093877
+# Moran_tpha(pien_sum_all) #p = 0.6910252
+# Moran_tpha(pipo_sum_all) #p = 4.461112e-05
+# Moran_tpha(psme_sum_all) #p = 0.003478499
+
+
+
+```
+
+
+### SEMIVARIOGRAM
+```{r SEMIVARIOGRAM}
+
+#data <- (spp_sum[!(spp_sum$site == "S-312-428" | spp_sum$site == "S-221-211"),])
+data <- spp_sum
+
+# construct x and y coordinates
+data$x <- data$long
+data$y <- data$lat
+plot(data$x, data$y)
+
+data.vgm <- variogram(tpha~1, loc = ~x+y, data = data) 
+plot(data.vgm)
+
+
+# test to see if residuals of my model are spatially autocorrelated
+model.vgm <- variogram(tpha ~ dem100 + slp100 + hli100
+                   + cti100 + cti10
+                   #+ shrub_perc
+                   + min_live_seed_dist
+                   + hli100:cti100,
+                   loc = ~x+y, data = data) 
+plot(model.vgm)
+deviance(model.nb8)/(df.residual(model.nb8)-1)
+summary(model.nb8)$dispersion
+```
