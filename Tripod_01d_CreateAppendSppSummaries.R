@@ -3,10 +3,10 @@
 spp_sum <- tripod %>%
   filter(! spp == "SEEDLING") %>%                    #*** NIXING SEEDLINGS***
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # all other columns are carried along as list (?). Nix 'em then add back on as variables
-spp_sum <- spp_sum[,c("site", "tpha")]
+spp_sum <- spp_sum[,c("site", "tpha", "tally_num")]
 spp_sum <- site_summary %>%
   right_join(spp_sum, by="site")
 
@@ -61,7 +61,7 @@ remove(spp_grwth_temp)
 abla_sum <- tripod %>%
   subset(., spp == "ABLA") %>%
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # nix and re-add variables -- actually, not necessary. maybe b/c of above subset?
 #abla_sum <- abla_sum[,c("site", "tpha")]
@@ -122,7 +122,7 @@ remove(abla_grwth_temp)
 laoc_sum <- tripod %>%
   subset(., spp == "LAOC") %>%
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # nix and re-add variables -- actually, not necessary. maybe b/c of above subset?
 #laoc_sum <- laoc_sum[,c("site", "tpha")]
@@ -185,7 +185,7 @@ remove(laoc_grwth_temp)
 pico_sum <- tripod %>%
   subset(., spp == "PICO") %>%
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # nix and re-add variables -- actually, not necessary. maybe b/c of above subset?
 #pico_sum <- pico_sum[,c("site", "tpha")]
@@ -247,7 +247,7 @@ remove(pico_grwth_temp)
 pien_sum <- tripod %>%
   subset(., spp == "PIEN") %>%
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # nix and re-add variables -- actually, not necessary. maybe b/c of above subset?
 #pien_sum <- pien_sum[,c("site", "tpha")]
@@ -306,7 +306,7 @@ remove(pien_grwth_temp)
 pipo_sum <- tripod %>%
   subset(., spp == "PIPO") %>%
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # nix and re-add variables -- actually, not necessary. maybe b/c of above subset?
 #pipo_sum <- pipo_sum[,c("site", "tpha")]
@@ -367,7 +367,7 @@ remove(pipo_grwth_temp)
 psme_sum <- tripod %>%
   subset(., spp == "PSME") %>%
   group_by(., site) %>%
-  summarize_at(c("tpha"), funs(sum(., na.rm=TRUE)))
+  summarize_at(c("tpha", "tally_num"), funs(sum(., na.rm=TRUE)))
 
 # nix and re-add variables -- actually, not necessary. maybe b/c of above subset?
 #psme_sum <- psme_sum[,c("site", "tpha")]

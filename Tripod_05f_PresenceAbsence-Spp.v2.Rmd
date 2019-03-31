@@ -129,10 +129,13 @@ summary(model.bin)
 model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
 summary(model.bin.step)
 
+temp = glm(laoc_PA ~ dem100 + laoc_dist_bin, data = PAdata, family = (binomial(link="logit")), maxit = 1000)
+lrtest(temp, model.bin.step)
+
 # Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
-# Set # groups g to > # covariates + 1
+# Set # groups g to > # covariates + 1. NO -- USE 10 PER Paul, P., Pennell, M. L., & Lemeshow, S. (2013). Standardizing the power of the Hosmer-Lemeshow goodness of fit test in large data sets. Statistics in medicine, 32(1), 67-80.
 # If I cite: Quinn, S. J., Hosmer, D. W., & Blizzard, C. L. (2015). Goodness-of-fit statistics for log-link regression models. Journal of Statistical Computation and Simulation, 85(12), 2533-2545.
-hl <- hoslem.test(PAdata$laoc_PA, fitted(model.bin.step), g=5)
+hl <- hoslem.test(PAdata$laoc_PA, fitted(model.bin.step), g=10)
 cbind(hl$observed, hl$expected)
 hl # Gives p value of 0.8939, which gives no evidence of poor fit...
 
@@ -143,8 +146,31 @@ roccurve <- roc(laoc_PA ~ laoc_pred, data = PAdata)
 plot(roccurve)
 auc(roccurve) # Want 1, here, 0.9385
 
+
+((model.bin.step$null.deviance - model.bin.step$deviance)/model.bin.step$null.deviance)
+(50.482 - 23.094)/50.482
+
+
+# SPATIAL AUTOCORRELATION
+Moran_space(PAdata, residuals(model.bin.step)) # PAdata already has long/lat
+
+# semivariogram
+temp <- data.frame(x=PAdata$long, y=PAdata$lat, residuals(model.bin.step))
+model.vgm <- variogram(mod.fin.rp ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+
+# final model
+(est.cnt.laoc <- cbind(Estimate = coef(mod.fin), confint(mod.fin)))
+
+
+
 model.PA.laoc <- model.bin.step
 summary(model.PA.laoc)
+
+
+
+
 
 ```
 
@@ -202,8 +228,8 @@ model.bin.step <- stepAIC(model.bin, direction = "backward", scope = .~.^2)
 summary(model.bin.step)
 
 # Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
-# Set # groups g to > # covariates + 1
-hl <- hoslem.test(PAdata$pien_PA, fitted(model.bin.step), g=6)
+# Set # groups g to > # covariates + 1 -- NO USE 10 PER Paul, P., Pennell, M. L., & Lemeshow, S. (2013). Standardizing the power of the Hosmer-Lemeshow goodness of fit test in large data sets. Statistics in medicine, 32(1), 67-80.
+hl <- hoslem.test(PAdata$pien_PA, fitted(model.bin.step), g=10)
 cbind(hl$observed, hl$expected)
 hl # Gives p value of 0.1884, which is getting close to poor fit...
 
@@ -213,6 +239,17 @@ PAdata$pien_pred <- pien_pred
 roccurve <- roc(pien_PA ~ pien_pred, data = PAdata)
 plot(roccurve)
 auc(roccurve) # Want 1, here, 0.8583
+
+((model.bin.step$null.deviance - model.bin.step$deviance)/model.bin.step$null.deviance)
+
+# SPATIAL AUTOCORRELATION
+Moran_space(PAdata, residuals(model.bin.step)) # PAdata already has long/lat
+
+# semivariogram
+temp <- data.frame(x=PAdata$long, y=PAdata$lat, residuals(model.bin.step))
+model.vgm <- variogram(mod.fin.rp ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
 
 model.PA.pien <- model.bin.step
 summary(model.PA.pien)
@@ -240,7 +277,7 @@ summary(model.bin.step)
 
 # Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
 # Set # groups g to > # covariates + 1
-hl <- hoslem.test(PAdata$pipo_PA, fitted(model.bin.step), g=6)
+hl <- hoslem.test(PAdata$pipo_PA, fitted(model.bin.step), g=10)
 cbind(hl$observed, hl$expected)
 hl # Gives p value of 0.7837, suggests no evidence of poor fit
 
@@ -250,6 +287,17 @@ PAdata$pipo_pred <- pipo_pred
 roccurve <- roc(pipo_PA ~ pipo_pred, data = PAdata)
 plot(roccurve)
 auc(roccurve) # Want 1, here, 0.9267
+
+((model.bin.step$null.deviance - model.bin.step$deviance)/model.bin.step$null.deviance)
+
+
+# SPATIAL AUTOCORRELATION
+Moran_space(PAdata, residuals(model.bin.step)) # PAdata already has long/lat
+
+# semivariogram
+temp <- data.frame(x=PAdata$long, y=PAdata$lat, residuals(model.bin.step))
+model.vgm <- variogram(mod.fin.rp ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
 
 model.PA.pipo <- model.bin.step
 summary(model.PA.pipo)
@@ -276,7 +324,7 @@ summary(model.bin.step)
 
 # Goodness of fit using Hosmer-Lemeshow: comparison of observed 1s & 0s vs. predicted
 # Set # groups g to > # covariates + 1
-hl <- hoslem.test(PAdata$psme_PA, fitted(model.bin.step), g=4)
+hl <- hoslem.test(PAdata$psme_PA, fitted(model.bin.step), g=10)
 cbind(hl$observed, hl$expected)
 hl # Gives p value of 0.5407, suggests no evidence of poor fit
 
@@ -287,17 +335,16 @@ roccurve <- roc(psme_PA ~ psme_pred, data = PAdata)
 plot(roccurve)
 auc(roccurve) # Want 1, here, 0.8466
 
+
+((model.bin.step$null.deviance - model.bin.step$deviance)/model.bin.step$null.deviance)
+
+
 # SPATIAL AUTOCORRELATION
-data$long <- laoc_sum_all$long
-data$lat <- laoc_sum_all$lat
-Moran_space(data, model.bin.step$residuals)
-# Null is no SAC
+Moran_space(PAdata, residuals(model.bin.step)) # PAdata already has long/lat
 
 # semivariogram
-data$x <- data$long
-data$y <- data$lat
-temp <- data.frame(x=data$x, y=data$y, resids=model.bin.step$residuals)
-model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+temp <- data.frame(x=PAdata$long, y=PAdata$lat, residuals(model.bin.step))
+model.vgm <- variogram(mod.fin.rp ~ 1, location = ~x+y, data = temp)
 plot(model.vgm)
 
 
@@ -310,35 +357,57 @@ summary(model.PA.psme)
 
 
 ### PLOT OPTIONS
-```{r PLOT OPTIONS}
+```{r figures}
+# Too few for ABLA, too many for PICO
+laoc.plot <- ggplot(PAdata, aes(x=laoc_dist_bin, y=laoc_PA))
+pien.plot <- ggplot(PAdata, aes(x=pien_dist_bin, y=pien_PA))
+pipo.plot <- ggplot(PAdata, aes(x=pipo_dist_bin, y=pipo_PA))
+psme.plot <- ggplot(PAdata, aes(x=psme_dist_bin, y=psme_PA))
 
+
+p1 <- laoc.plot + geom_point(shape = 16, alpha=1/2, size=3,
+                             position = position_jitter(width=1,height=0)) +
+  labs(x = "Distance to live conspecific seed source (m)",
+       y="Probability of seedling presence") +
+  theme_caitlin()
+  # annotate("text", x = 222, y = 28800, label = "lodgepole pine")
 summary(model.PA.laoc)
-summary(model.PA.pien)
-summary(model.PA.pipo)
-summary(model.PA.psme)
+## To plot relationship btwn distance and probability, create model for only dist.
+mod.pred <- glm(laoc_PA ~ laoc_dist_bin,
+                data = PAdata,
+                family = binomial(link = "logit"), maxit = 1000)
+# Predict based on range of values with laoc_dist_bin
+range(PAdata$laoc_dist_bin) # 2 & 8 to use values between that
+xdist <- seq(0,10,0.05)
+pred <- predict(mod.pred, list(laoc_dist_bin = xdist), type = "response", se = TRUE)
+plot(PAdata$laoc_dist_bin, PAdata$laoc_PA)
+lines(xdist, pred$fit)
+FSEUP <- (pred$fit + 1.96 * pred$fit)
+FSELOW <- (pred$fit - 1.96 * pred$fit)
+lines(xdist, pred$fit, lty = 1)
+lines(xdist, FSEUP, lty = 2)
+lines(xdist, FSELOW, lty = 2)
 
 
-### 180206: ALL OF THESE PLOT GENERATORS HAVE BEEN CHANGED
 
-`sjp.glm()` will become deprecated in the future. Please use `plot_model()` instead.
-This plot type has been removed, as it was misleading. Use `plot_model` with `type = "pred"` to plot marginal effects, or with `type = "slope"` for model diagnostisc.
+p2 <- pipo.plot + geom_point(shape = 16, alpha=1/2, size=3, position = position_jitter(width=1,height=1)) +
+  labs(x = "Distance to live conspecific seed source (m)", y="Juvenile density (stems/ha)") +
+  theme_caitlin() +
+  annotate("text", x = 260, y = 3150, label = "ponderosa pine")
 
+p3 <- pico.box + geom_boxplot() +
+  labs(x = "Extant cones on snags", y = "Juvenile density (stems/ha)") + 
+  theme_caitlin() +
+  scale_x_discrete(labels = c("not present", "present")) +
+  annotate("text", x = 0.8, y = 28800, label = "lodgepole pine")
 
+p4 <- psme.plot + geom_point(shape = 16, alpha=1/2, size=3, position = position_jitter(width=1,height=1)) +
+  labs(x = "Distance to live conspecific seed source (m)", y="Juvenile density (stems/ha)") +
+  theme_caitlin() +
+  annotate("text", x = 137, y = 1600, label = "Douglas-fir")
 
-# Pick most significant topo predictors for laoc
-sjp.glm(model.PA.laoc, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "dem100")
-
-# Pick most significant topo predictors for pien
-sjp.glm(model.PA.pien, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "dem100")
-sjp.glm(model.PA.pien, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "cti100")
-
-# Pick most significant topo predictors for pipo
-sjp.glm(model.PA.pipo, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "dem100")
-sjp.glm(model.PA.pipo, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "slp100")
-sjp.glm(model.PA.pipo, type = "slope", facet.grid = FALSE, show.ci = TRUE, vars = "tpi100")
-
-# No significant topo predictors for psme.
-# All of the above plots have pretty lousy curves except for DEM & LAOC.
-
-http://www.theanalysisfactor.com/r-glm-plotting/
+# png("//goshawk.sefs.uw.edu/Space_Lawler/Shared/BackedUp/Caitlin/Tripod/Dir/tpha_vs_seed_dist_spp_2019-03-18.png", units = "in", width = 8, height = 6, res = 600)
+# png("D:/Shared/BackedUp/Caitlin/Tripod/Dir/tpha_vs_seed_dist_spp_2019-03-18.png", units = "in", width = 8, height = 6, res = 600)
+multiplot(p1, p2, p3, p4, cols=2)
+dev.off()
 ```

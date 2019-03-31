@@ -1,0 +1,1682 @@
+---
+title: "Density-Spp"
+author: "CaitLittlef"
+date: "May 22, 2017"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+##### NOTES
+Must run Tripod_00_Main.R (and sourced codes therein) before proceeding!
+
+Some of my zeros are going to be there simply because those species were never going to be there (e.g., palm trees). But some will also be there not JUST for that "structural" reason but as a legitimate sampling result. So, don't just use hurdle (zero-truncated) which (I think) prevents zeros from being legit data points. Instead, use zero-inflated. Doing |1 says all zeros have same probability of belonging to zero component. (I think) one would use this in the absence of an explanation -- but I HAVE an explanation: seed dist. (N.b., above all per 180111 convo with stats consulting folks).
+
+Funny that, in using, stepAIC, sometimes I can still achieve an improved AIC value by dropping more variables (the least significant of what remains). Maybe there's some threshold of improvement.
+
+N.b., using bins b/c don't have measure to seed tree for some sites (basically ~ too far)
+
+N.b., my scaling may be a bit problematic with the distance bins -- but without scaling, get errors (compultationally singular). But with intervals, I'm basically dividing the values by 25m, so I'm maintaining their relative magnitude.
+
+N.b., could consider a mixed effects model with a random term set for the site, but because plots within the site are not my unit of analysis -- I'm already aggregating to site -- I'm not going to do so. Here's what I'd use, though:# # test with mixed model (has random term)
+<!-- # test = glmmPQL(psme_PA ~ dem100 -->
+<!-- #                + slp100 -->
+<!-- #                + hli100 -->
+<!-- #                + tpi100 -->
+<!-- #                + cti100 -->
+<!-- #                + shrub_perc -->
+<!-- #                + psme_dist_bin, -->
+<!-- #                random = ~1|site, -->
+<!-- #                data = PAdata, -->
+<!-- #                family = (binomial(link="logit")), -->
+<!-- #                maxit=100) -->
+<!-- # summary(test) -->
+
+### ZERO-INFLATED - ALBA - NOT RUNNING B/C ONLY AT 4 SITES & MODEL WOULDN'T CONVERGE (# COVARITES > # OBS)
+### LAOC
+```{r LAOC}
+
+data <- laoc_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 21)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, tally=data.raw$tally_num) # add site back on
+data <- data[, c(8,9,10,1,2,3,4,5,6,7)] ; print(data) # re-order
+data$tally[is.na(data$tally)] <- 0
+remove(var.scale)
+
+# Attach look-up table for area sampled at each site
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data <- data %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+
+
+## Poisson
+# Poisson b/c count?
+model.pois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin + offset(log(area)),
+                 data = data, family = (poisson(link = "log")),
+                 maxit = 1000)
+summary(model.pois)
+pois.rp <-resid(model.pois, type = "pearson") 
+n <- nrow(data)
+sum(pois.rp^2)/(51-7) # gives dispersion parameter 36.34068 (Zuur p. 233)
+
+
+## NB
+# Try negative binomial for dispersion
+model.nb = glm.nb(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc +
+                  laoc_dist_bin + offset(log(area)),
+                  data = data,
+                  maxit=1000)
+summary(model.nb)
+nb.rp <-resid(model.nb, type = "pearson") 
+n <- nrow(data)
+sum(nb.rp^2)/(51-7)
+
+
+# Zero-inflated Poisson with distance 
+model.zip <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin + offset(log(area))| laoc_dist_bin,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip)
+zip.rp <- resid(model.zip, type = "pearson")
+n <- nrow(data)
+sum(zip.rp^2)/(51-7)
+
+# Zero-inflated poisson with only intercept
+model.zip1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip1)
+zip1.rp <- resid(model.zip1, type = "pearson")
+n <- nrow(data)
+sum(zip1.rp^2)/(51-7)
+
+
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin + offset(log(area))| laoc_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb)
+zinb.rp <- resid(model.zinb, type = "pearson")
+n <- nrow(data)
+sum(zinb.rp^2)/(51-7)
+
+
+# Zero-inflated negative binomial with only 1
+model.zinb1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb1) ; AIC(model.zinb.1)
+# Confirm theta
+zinb1.rp <- resid(model.zinb1, type = "pearson")
+n <- nrow(data)
+sum(zinb1.rp^2)/(51-7)
+
+AIC(model.pois, model.nb, model.zip, model.zip1, model.zinb, model.zinb1)
+
+
+## Compare predicted number of zeros to observed (Zeilis et al 2008)
+round(c("obs" = sum(data$tally < 1),
+        pois = sum(dpois(0, fitted(model.pois))),
+        nb = sum(dnbinom(0, mu = fitted(model.nb), size = model.nb$theta)),
+        zip = sum(predict(model.zip, type = "prob")[,1]),
+        zip1 = sum(predict(model.zip1, type = "prob")[,1]),
+        zinb = sum(predict(model.zinb, type = "prob")[,1]),
+        zinb1 = sum(predict(model.zinb1, type = "prob")[,1])))
+      
+# Compare means.
+round(c("obs" = mean(data$tally),
+        pois = mean(fitted(model.pois)),
+        nb = mean(fitted(model.nb)),
+        zip = mean(predict(model.zip, type = "response")),
+        zip1 = mean(predict(model.zip1, type = "response")),
+        zinb = mean(predict(model.zinb, type = "response")),
+        zinb1 = mean(predict(model.zinb1, type = "response"))))
+
+# Compare medians.
+round(c("obs" = median(data$tally),
+        pois = median(fitted(model.pois)),
+        nb = median(fitted(model.nb)),
+        zip = median(predict(model.zip, type = "response")),
+        zip1 = median(predict(model.zip1, type = "response")),
+        zinb = median(predict(model.zinb, type = "response")),
+        zinb1 = median(predict(model.zinb1, type = "response"))))
+
+# 
+# Compare log-likelihood (Zeilis 2008)
+list <- list("pois" = model.pois,
+             "nb" = model.nb,
+             "zip" = model.zip,
+             "zip1" = model.zip1,
+             "zinb" = model.zinb,
+             "zinb1" = model.zinb1)
+rbind(logLik = sapply(list, function(x) round(logLik(x),0)),
+      DF = sapply(fm, function(x) attr(logLik(x), "df")))  
+
+
+# CANNOT COMPARE MODEL.NB with MODEL.ZINB1 WITH LRTEST B/C NOT NESTED
+lrtest(model.pois, model.nb) # variance NOT the same. Worth adding extra parameter (nb)
+vuongtest(model.nb, model.zip1) # var aren't same, but model fits are equal. no zip.
+vuongtest(model.nb, model.zinb1) # var the same, model fits are equal. no zinb.
+
+# If the overdispersion in a Poisson GLM is caused by the excessive number of zeros,
+# then the ZIP will take care of the overdispersion, and we are finished. But if the
+# overdispersion is not caused by the zeros, then the ZIP is not the appropriate model
+# either! The best way to judge whether the ZIP is acceptable is to compare it with a
+# ZINB as these models are nested. (Zuur p. 280)
+
+lrtest(model.zip1, model.zinb1)
+# Likelihood ratio test
+# 
+# Model 1: tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + 
+#     laoc_dist_bin + offset(log(area)) | 1
+# Model 2: tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + 
+#     laoc_dist_bin + offset(log(area)) | 1
+#   #Df  LogLik Df  Chisq Pr(>Chisq)
+# 1   9 -42.980                     
+# 2  10 -41.884  1 2.1907     0.1388
+# Suggests I'm not justified in using nb: can't reject null that Poisson variance (simpler) = NB variance
+
+
+# What about including additional parameter to model zeros?
+lrtest(model.zinb, model.zinb1)
+# Likelihood ratio test
+# 
+# Model 1: tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + 
+#     laoc_dist_bin + offset(log(area)) | laoc_dist_bin
+# Model 2: tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + 
+#     laoc_dist_bin + offset(log(area)) | 1
+#   #Df  LogLik Df  Chisq Pr(>Chisq)
+# 1  11 -41.266                     
+# 2  10 -41.884 -1 1.2366     0.2661
+# ^ Provides no evidence to include additional parameter of laoc_dist_bin.
+
+
+
+# ## Cannot run step to select variables -- I guess due to offset :/
+# # So, iteratively drop least significant? Zuur p. 282
+# # Recall with lrtest, null is that variance of two models are the same...
+# # one model having fewer parameters (more parsimonious) than the other.
+# # If p>0.05, variances are similar enough to drop that extra term.
+# summary(model.zinb1) 
+# # drop cti100
+# fA <- formula(tally ~ dem100 + slp100 + tpi100 +  + shrub_perc +
+#                 laoc_dist_bin + offset(log(area)) | 1)
+# mA <- zeroinfl(fA, data = data, dist = "negbin", maxit=1000) ; summary(mA)
+# lrtest(model.zinb1, mA) 
+# # p>0.05 cannot reject null that models have same variance so drop it. Next:
+# # drop shrub_perc
+# fB <- formula(tally ~ dem100 + tpi100 + cti100 +
+#                 laoc_dist_bin + offset(log(area)) | 1)
+# mB <- zeroinfl(fB, data = data, dist = "negbin", maxit=1000) ; summary(mB)
+# lrtest(mA, mB)
+# # p>0.05 cannot reject null that models have same variance so drop it. Next:
+# # drop cti
+# fC <- formula(tally ~ dem100 + tpi100  +
+#                 laoc_dist_bin + offset(log(area)) | 1)
+# mC <- zeroinfl(fC, data = data, dist = "negbin", maxit=1000) ; summary(mC)
+# lrtest(mC, mB)
+# # p>0.05 cannot reject null that models have same variance so drop it. Next:
+# # drop tpi
+# fD <- formula(tally ~  dem100  +
+#                 laoc_dist_bin + offset(log(area)) | 1)
+# mD <- zeroinfl(fD, data = data, dist = "negbin", maxit=1000) ; summary(mD)
+# lrtest(mC, mD) 
+# # p>0.05 cannot reject null that models have same variance so drop it. Next:
+# # drop dem100
+# fE <- formula(tally ~ laoc_dist_bin + offset(log(area)) | 1)
+# mE <- zeroinfl(fE, data =data, dist = "negbin", maxit =1000) ; summary(mE)
+# lrtest(mE, mD) 
+# # p<0.05 models have different variance, so retain dem100.
+# mod.fin <- mD
+
+
+
+## TRY WITH NON-ZERO-INFLATED
+summary(model.nb)
+# drop cti
+fA <- formula(tally ~ dem100 + slp100 + hli100 + tpi100 +  shrub_perc +
+                laoc_dist_bin + offset(log(area)))
+mA <- glm.nb(fA, data = data, maxit = 1000) ; summary(mA)
+lrtest(model.nb, mA) 
+# p>0.05 cannot reject null that models have same variance so drop it. Next:
+# drop slp & hli at same time else won't converge
+fB <- formula(tally ~ dem100 + tpi100 +  shrub_perc +
+                laoc_dist_bin + offset(log(area)))
+mB <- glm.nb(fB, data = data, maxit = 1000) ; summary(mB)
+lrtest(mA, mB)
+# p>0.05 cannot reject null that models have same variance so drop it. Next:
+# dropping shrub & tpi else won't converge
+fC <- formula(tally ~ dem100 +  
+                laoc_dist_bin + offset(log(area)))
+mC <- glm.nb(fC, data = data, maxit = 1000) ; summary(mC)
+lrtest(mC, mB)
+# justfieid in dropping. Now all variables are significant. keep.
+mod.fin <- mC
+
+
+## MODEL VALIDATION
+# Pearson chi-squared test -- CANNOT DO WITH ZIP/ZINB MODELS
+EP <- resid(mod.fin, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 2), lower.tail=FALSE) # 51 = n and 4 = p (# parameters); same as df.resid
+# Null is that model is correctly specified and here keep null (p=0.6991715)
+
+## Spearman rank
+pred <- predict(mod.fin, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") 
+
+
+# PSEUDO R^2
+((mod.fin$null.deviance - mod.fin$deviance)/mod.fin$null.deviance) # 0.5036584
+
+## MODEL VALIDATION
+# X Pearson chi-squared test -- CANNOT DO WITH ZIP/ZINB MODELS
+# But try with non zinb mod:
+
+
+# X Propotion deviance explained (psuedo r^2) -- DEVIANCE NOT DEFINED FOR ZIP/ZINB
+
+## Spearman rank
+pred <- predict(mod.fin, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") 
+# rho = 0.5715572 
+
+
+############################
+## PLOT FOR VALIDATION
+
+options(scipen=999)
+
+# Need to scope out outliers. Zuur quotes: observations with...
+# ...a Cook distance larger than 1, which is the threshold value...
+# ...upon one should take further action (Fox, 2002)
+data[36,] # Kept showing up way out there with mod.fin.rp = 7
+# It's what also showed up with simple (non zero-inflated) -- can't do cooks w/ zeroinf.
+plot(cooks.distance(model.nb), ylab = "Cooks distance")
+points(36, cooks.distance(model.nb)[36], col = 'red')
+data.update <- data[-36,]
+mod.fin.update <- update(mod.fin, data = data.update)
+mod.fin.dp.update <- residuals(mod.fin.update)
+
+plot(fitted(mod.fin.update), data.update$tally)
+plot(fitted(mod.fin.update), mod.fin.dp.update)
+plot(data.update$tally, mod.fin.dp.update)
+plot(data.update$laoc_dist_bin, mod.fin.dp.update)
+
+# But...
+data %>% count(tally) # only 10 sites had LAOC. Seems crazy to drop one site.
+# Plus, model parameter values don't change (not going back thru re-fit) 
+summary(mod.fin.update) ; summary(mod.fin)
+
+
+
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data.raw <- data.raw %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+data.raw$tally <- data.raw$tally_num
+
+currentDate <- Sys.Date()
+
+dev.off()
+# tiff(paste0("diagnostics.laoc_",currentDate,".tif"), width = 6, height = 8, units = "in", res = 200)
+# tiff(paste0("diagnostics.laoc.3_",currentDate,".tif"), width = 6, height = 2, units = "in", res = 200)
+# par(mfrow=c(1,1))
+par(mfrow=c(4,3))
+par(mfrow=c(1,3))
+plot(fitted(mod.fin), data$tally, xlab = "fit cnt", ylab = "obs cnt")
+points(fitted(mod.fin)[c()], data$tally[c()], col = "red")
+# ^ Expect 1:1
+plot(fitted(mod.fin), mod.fin.dp, xlab = "fit cnt", ylab = "resid")
+points(fitted(mod.fin)[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect no pattern.
+plot(data$tally, mod.fin.dp, xlab = "obs cnt", ylab = "resid")
+points(data$tally[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect correlation: + resid for lrg values, - resid for sml.
+# B/c resids are what's left when obs-fitted: model predicts more mod values than observed
+plot(data.raw$dem100, residuals(mod.fin), xlab = "elev *", ylab = "resid")
+points(data.raw$dem100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+# ^ Covariate is not in model -- expect no pattern.
+plot(data.raw$slp100, residuals(mod.fin), xlab = "slp", ylab = "resid")
+points(data.raw$slp100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+# ^ Covariate in model -- if there's a pattern, relationship may be nonlinear.
+plot(data.raw$hli100, residuals(mod.fin), xlab = "hli", ylab = "resid")
+points(data.raw$hli100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$cti100, residuals(mod.fin), xlab = "cti", ylab = "resid")
+points(data.raw$cti100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$tpi100, residuals(mod.fin), xlab = "tpi", ylab = "resid")
+points(data.raw$tpi100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$laoc_dist_bin, residuals(mod.fin), xlab = "seed dist bin *", ylab = "resid")
+points(data.raw$laoc_dist_bin[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$shrub_perc, residuals(mod.fin), xlab = "shrub %", ylab = "resid")
+points(data.raw$shrub_perc[c(36)], residuals(mod.fin)[c(36)], col = "red")
+dev.off()
+
+
+
+# But...
+data %>% count(tally) # only 10 sites had LAOC. Seems crazy to drop one site.
+# Plus, model parameter values don't change (not going back thru re-fit) 
+summary(mod.fin.update) ; summary(mod.fin)
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- laoc_sum_all$long
+data$lat <- laoc_sum_all$lat
+Moran_space(data, residuals(mod.fin))
+# Null is no SAC
+
+# semivariogram
+data$x <- data$long
+data$y <- data$lat
+temp <- data.frame(x=data$x, y=data$y, mod.fin.rp)
+model.vgm <- variogram(mod.fin.rp ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+# final model
+(est.cnt.laoc <- cbind(Estimate = coef(mod.fin), confint(mod.fin)))
+
+
+
+## Try plotting, following Zuur p. 219 -- use new data with predictor range to generate lines.
+# Nb I'll have to go back and do this with the exponentiated coefficients b/c these are scaled.
+# But can't get prediction interavls from zeroinf yet
+# https://stat.ethz.ch/pipermail/r-help/2008-December/182806.html
+# Does this: https://www.rdocumentation.org/packages/pscl/versions/0.54/topics/predict.zeroinfl
+# The code is in predict zero.infl.R
+source("predict zero infl.R")
+
+plot(data$laoc_dist_bin, data$tally)
+temp <- data.frame(laoc_dist_bin = seq(from = -3, to = 3, by = 0.25), # (-3,3) b/c scaled
+                   area = 0.03)
+G <- predict.zeroinfl(mod.fin, newdata = temp, se = TRUE, type = "response", MC = 1000)
+F.se.up <- G[[1]] + G[[2]]$se 
+F.se.lo <- G[[1]] - G[[2]]$se
+lines(temp$laoc_dist_bin, G[[1]], lty = 1)
+lines(temp$laoc_dist_bin, F.se.up, lty = 2)
+lines(temp$laoc_dist_bin, F.se.lo, lty = 2)
+
+
+# Un-scaled version for interpretation of incremental changes to covariates.
+zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + laoc_dist_bin + offset(log(area))| laoc_dist_bin,
+                       data = data, dist = "poisson", maxit=1000)
+
+data.raw$area <- data$area
+data.raw <- data.raw %>% rename(tally = tally_num)
+data.raw$tally[is.na(data.raw$tally)] <- 0
+mod.raw <- zeroinfl(tally ~ laoc_dist_bin + offset(log(area)) | 1,
+                   data = data.raw, dist = "negbin", maxit = 1000)
+summary(mod.raw)
+plot(data.raw$laoc_dist_bin, data.raw$tally)
+temp <- data.frame(laoc_dist_bin = seq(from = 1, to = 8, by = 0.25),
+                   area = 0.03)
+G <- predict.zeroinfl(mod.raw, newdata = temp, se = TRUE, type = "response", MC = 1000)
+F.se.up <- G[[1]] + G[[2]]$se 
+F.se.lo <- G[[1]] - G[[2]]$se
+lines(temp$laoc_dist_bin, G[[1]], lty = 1)
+lines(temp$laoc_dist_bin, F.se.up, lty = 2)
+lines(temp$laoc_dist_bin, F.se.lo, lty = 2)
+
+#  If normal predict (non zero info) with type = "link", use 
+# F <- exp(G$fit)                  
+# FSEUP <- exp(G$fit + 1.96 * G$se.fit)
+# FSELOW <- exp(G$fit - 1.96 * G$se.fit)
+# lines(temp$laoc_dist_bin, F, lty = 1)
+# lines(temp$laoc_dist_bin, FSEUP, lty = 2)
+# lines(temp$laoc_dist_bin, FSELOW, lty = 2)
+
+
+# Get coefficients
+(est.mod.raw <- cbind(Estimate = coef(mod.raw), confint(mod.raw)))
+# Remember, in this model, there's a multiplicative relationship btwn x & y.
+# These coefficients have an ADDITIVE effect when in the ln(y) scale...
+#...and a MULTIPLICATIVE effect in y scale. So, exponentiating won't give...
+# simple "for every unit increaese in min_live_seed_dist, I get 10x more tpha".
+# Instead, for one unit increase in seed dist, tpha will be * by exp(-0.9486071)=3.872801e-01
+# Exponentiating coefficients gives Incident Rate Ratios.
+exp(est.mod.raw)
+#                        Estimate        2.5 %       97.5 %
+# (Intercept)        1.840908e+04 8848.3952217 4.048252e+04
+# shrub_perc         6.517006e-02    0.0176260 2.482590e-01
+# min_live_seed_dist 9.896663e-01    0.9813415 9.993233e-01 <-- 0.9896663 * original outcome...
+# (...i.e., prior to adding one additional unit of min_live_seed_dist.)
+# So, every increase in min_live_seed_dist results in 2% decrease tpha.
+
+
+```
+
+
+
+### PICO
+```{r pico}
+
+data <- pico_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 22)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, air_seed=data.raw$site_air_seed, tally=data.raw$tally_num) # add site, tpha, air back on
+data$tally[is.na(data$tally)] <- 0
+remove(var.scale)
+
+# Attach look-up table for area sampled at each site
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data <- data %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+
+## Poisson
+model.pois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 +
+                 shrub_perc + pico_dist_bin + air_seed + offset(log(area)),
+                 data = data, family = (poisson(link = "log")),
+                 maxit = 1000)
+summary(model.pois)
+pois.rp <-resid(model.pois, type = "pearson") 
+sum(pois.rp^2)/(51-7) # gives dispersion parameter 130.3837
+
+## NB
+model.nb = glm.nb(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 +
+                 shrub_perc + pico_dist_bin + air_seed + offset(log(area)),
+                 data = data, maxit = 1000)
+summary(model.nb)
+nb.rp <-resid(model.nb, type = "pearson") 
+sum(nb.rp^2)/(51-7) # gives dispersion parameter 0.9013455
+
+## Will addressing zeros take care of dispersion?
+# ZIP
+model.zip <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed + offset(log(area))| pico_dist_bin,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip)
+zip.rp <- resid(model.zip, type = "pearson")
+n <- nrow(data)
+sum(zip.rp^2)/(51-7)
+
+# Zero-inflated poisson with only intercept
+model.zip1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed + offset(log(area))| 1,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip1)
+zip1.rp <- resid(model.zip1, type = "pearson")
+n <- nrow(data)
+sum(zip1.rp^2)/(51-7)
+
+
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed + offset(log(area))| pico_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb)
+zinb.rp <- resid(model.zinb, type = "pearson")
+n <- nrow(data)
+sum(zinb.rp^2)/(51-7)
+
+
+# Zero-inflated negative binomial with only 1
+model.zinb1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pico_dist_bin + air_seed + offset(log(area))| 1,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb1) ; AIC(model.zinb.1)
+# Confirm theta
+zinb1.rp <- resid(model.zinb1, type = "pearson")
+n <- nrow(data)
+sum(zinb1.rp^2)/(51-7)
+
+AIC(model.pois, model.nb, model.zip, model.zip1, model.zinb, model.zinb1)
+
+
+## Compare predicted number of zeros to observed (Zeilis et al 2008)
+round(c("obs" = sum(data$tally < 1),
+        pois = sum(dpois(0, fitted(model.pois))),
+        nb = sum(dnbinom(0, mu = fitted(model.nb), size = model.nb$theta)),
+        zip = sum(predict(model.zip, type = "prob")[,1]),
+        zip1 = sum(predict(model.zip1, type = "prob")[,1]),
+        zinb = sum(predict(model.zinb, type = "prob")[,1]),
+        zinb1 = sum(predict(model.zinb1, type = "prob")[,1])))
+      
+# Compare means.
+round(c("obs" = mean(data$tally),
+        pois = mean(fitted(model.pois)),
+        nb = mean(fitted(model.nb)),
+        zip = mean(predict(model.zip, type = "response")),
+        zip1 = mean(predict(model.zip1, type = "response")),
+        zinb = mean(predict(model.zinb, type = "response")),
+        zinb1 = mean(predict(model.zinb1, type = "response"))))
+
+# Compare medians.
+round(c("obs" = median(data$tally),
+        pois = median(fitted(model.pois)),
+        nb = median(fitted(model.nb)),
+        zip = median(predict(model.zip, type = "response")),
+        zip1 = median(predict(model.zip1, type = "response")),
+        zinb = median(predict(model.zinb, type = "response")),
+        zinb1 = median(predict(model.zinb1, type = "response"))))
+
+
+# Compare log-likelihood (Zeilis 2008)
+list <- list("pois" = model.pois,
+             "nb" = model.nb,
+             "zip" = model.zip,
+             "zip1" = model.zip1,
+             "zinb" = model.zinb,
+             "zinb1" = model.zinb1)
+rbind(logLik = sapply(list, function(x) round(logLik(x),0)),
+      DF = sapply(fm, function(x) attr(logLik(x), "df")))             
+
+
+
+# CANNOT COMPARE MODEL.NB with MODEL.ZINB1 WITH LRTEST B/C NOT NESTED
+lrtest(model.pois, model.nb) # variance NOT the same. Worth adding extra parameter (nb)
+vuongtest(model.nb, model.zip1) # no zip.
+vuongtest(model.nb, model.zinb1) # var the same, model fits are equal. no zinb.
+
+lrtest(model.nb, model.pois)
+vuongtest(model.nb, model.zip1)
+vuongtest(model.nb, model.zinb1)
+
+
+data %>% count(tally)
+hist(data$tally, 20)
+
+## Try step with regular nb to see how parameters shake out
+model.nb.step <- stepAIC(model.nb) ; AIC(model.nb.step) # 543.5504
+# Leaves in dem, hli, tpi, shrub, dist, air <-- a lot
+summary(model.nb.step)
+mod.fin <- model.nb.step
+
+
+
+#########################################
+## MODEL VALIDATION
+## Pearson chi-squared test (ok b/c not zero-inflated)
+EP <- resid(mod.fin, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 3), lower.tail=FALSE) # 51 = n and 4 = 3 (# parameters); same as df.resid
+# Null is that model is correctly specified and here keep null (p=0.6991715)
+
+## Spearman rank
+pred <- predict(mod.fin, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") 
+# rho = 0.574983 
+
+
+# PSEUDO R^2
+((mod.fin$null.deviance - mod.fin$deviance)/mod.fin$null.deviance) # 0.3002893
+
+
+
+
+############################
+## PLOT FOR VALIDATION
+
+options(scipen=999)
+
+# Need to scope out outliers. Zuur quotes: observations with...
+# ...a Cook distance larger than 1, which is the threshold value...
+# ...upon one should take further action (Fox, 2002)
+# It's what also showed up with simple (non zero-inflated) -- can't do cooks w/ zeroinf.
+plot(cooks.distance(mod.fin), ylab = "Cooks distance") # Nothing exceeds cooks.
+
+# Plus, model parameter values don't change (not going back thru re-fit) 
+
+
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data.raw <- data.raw %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+data.raw$tally <- data.raw$tally_num
+
+currentDate <- Sys.Date()
+
+dev.off()
+# tiff(paste0("diagnostics.pico_",currentDate,".tif"), width = 6, height = 8, units = "in", res = 200)
+# tiff(paste0("diagnostics.pico.3_",currentDate,".tif"), width = 6, height = 2, units = "in", res = 200)
+par(mfrow=c(1,1))
+par(mfrow=c(4,3))
+par(mfrow=c(1,3))
+plot(fitted(mod.fin), data$tally, xlab = "fit cnt", ylab = "obs cnt")
+points(fitted(mod.fin)[c()], data$tally[c()], col = "red")
+# ^ Expect 1:1
+plot(fitted(mod.fin), mod.fin.dp, xlab = "fit cnt", ylab = "resid")
+points(fitted(mod.fin)[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect no pattern.
+plot(data$tally, mod.fin.dp, xlab = "obs cnt", ylab = "resid")
+points(data$tally[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect correlation: + resid for lrg values, - resid for sml.
+# B/c resids are what's left when obs-fitted: model predicts more mod values than observed
+plot(data.raw$dem100, residuals(mod.fin), xlab = "elev", ylab = "resid")
+points(data.raw$dem100[c()], residuals(mod.fin)[c()], col = "red")
+# ^ Covariate is not in model -- expect no pattern.
+plot(data.raw$slp100, residuals(mod.fin), xlab = "slp", ylab = "resid")
+points(data.raw$slp100[c()], residuals(mod.fin)[c()], col = "red")
+# ^ Covariate in model -- if there's a pattern, relationship may be nonlinear.
+plot(data.raw$hli100, residuals(mod.fin), xlab = "hli", ylab = "resid")
+points(data.raw$hli100[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$cti100, residuals(mod.fin), xlab = "cti", ylab = "resid")
+points(data.raw$cti100[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$tpi100, residuals(mod.fin), xlab = "tpi", ylab = "resid")
+points(data.raw$tpi100[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$pico_dist_bin, residuals(mod.fin), xlab = "seed dist bin", ylab = "resid")
+points(data.raw$pico_dist_bin[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$pico_dist_bin, residuals(mod.fin), xlab = "aerial seed", ylab = "resid")
+points(data.raw$pico_dist_bin[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$shrub_perc, residuals(mod.fin), xlab = "shrub %", ylab = "resid")
+points(data.raw$shrub_perc[c()], residuals(mod.fin)[c()], col = "red")
+dev.off()
+
+
+
+# But...
+data %>% count(tally) # only 10 sites had LAOC. Seems crazy to drop one site.
+# Plus, model parameter values don't change (not going back thru re-fit) 
+summary(mod.fin.update) ; summary(mod.fin)
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- pico_sum_all$long
+data$lat <- pico_sum_all$lat
+Moran_space(data, residuals(mod.fin))
+# Null is no SAC
+
+# Model already shows signif of extant aerial seed bank -- no need to use tehse stats
+# # show diff btwn extant aerial seed bank and not
+# data$air_seed <- as.factor(data$air_seed)
+# mod.air <- lm(tpha ~ air_seed, data = data)
+# summary(mod.air)
+# anova(mod.air) # but data are clearly not normally distrubted (WAAAAAY more zeros)
+# hist(data$tpha)
+# 
+# # Use Kruskal Wallis test, which is non-parametric (based on ranks)
+# kruskal.test(tpha ~ air_seed, data = data)
+# # Yes, there's a significant diff.
+# dunn.test(x=data$tpha, g=data$air_seed, kw=TRUE)
+
+# # Use Kruskal Wallis test, which is non-parametric (based on ranks)
+kruskal.test(tpha ~ air_seed, data = data)
+# # Yes, there's a significant diff.
+dunn.test(x=data$tpha, g=data$air_seed, kw=TRUE)
+
+# # Use Kruskal Wallis test, which is non-parametric (based on ranks)
+kruskal.test(tally ~ air_seed, data = data)
+# # Yes, there's a significant diff.
+dunn.test(x=data$tally, g=data$air_seed, kw=TRUE)
+
+summary(mod.fin)
+
+mod.pico <- mod.fin
+
+```
+
+
+
+### PIEN
+```{r PIEN}
+
+data <- pien_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 21)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, tally=data.raw$tally_num) # add site back on
+data <- data[, c(8,9,10,1,2,3,4,5,6,7)] ; print(data) # re-order
+data$tally[is.na(data$tally)] <- 0
+remove(var.scale)
+
+# Attach look-up table for area sampled at each site
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data <- data %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+
+
+## Poisson
+# Poisson b/c count?
+model.pois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pien_dist_bin + offset(log(area)),
+                 data = data, family = (poisson(link = "log")),
+                 maxit = 1000)
+summary(model.pois)
+pois.rp <-resid(model.pois, type = "pearson") 
+n <- nrow(data)
+sum(pois.rp^2)/(51-7) # gives dispersion parameter 36.34068 (Zuur p. 233)
+
+
+## NB
+# Try negative binomial for dispersion
+model.nb = glm.nb(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc +
+                  pien_dist_bin + offset(log(area)),
+                  data = data,
+                  maxit=1000)
+summary(model.nb)
+nb.rp <-resid(model.nb, type = "pearson") 
+n <- nrow(data)
+sum(nb.rp^2)/(51-7)
+
+
+# Zero-inflated Poisson with distance 
+model.zip <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pien_dist_bin + offset(log(area))| pien_dist_bin,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip)
+zip.rp <- resid(model.zip, type = "pearson")
+n <- nrow(data)
+sum(zip.rp^2)/(51-7)
+
+# Zero-inflated poisson with only intercept
+model.zip1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pien_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip1)
+zip1.rp <- resid(model.zip1, type = "pearson")
+n <- nrow(data)
+sum(zip1.rp^2)/(51-7)
+
+
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pien_dist_bin + offset(log(area))| pien_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb)
+zinb.rp <- resid(model.zinb, type = "pearson")
+n <- nrow(data)
+sum(zinb.rp^2)/(51-7)
+
+
+# Zero-inflated negative binomial with only 1
+model.zinb1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pien_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb1) ; AIC(model.zinb.1)
+# Confirm theta
+zinb1.rp <- resid(model.zinb1, type = "pearson")
+n <- nrow(data)
+sum(zinb1.rp^2)/(51-7)
+
+AIC(model.pois, model.nb, model.zip, model.zip1, model.zinb, model.zinb1)
+
+
+## Compare predicted number of zeros to observed (Zeilis et al 2008)
+round(c("obs" = sum(data$tally < 1),
+        pois = sum(dpois(0, fitted(model.pois))),
+        nb = sum(dnbinom(0, mu = fitted(model.nb), size = model.nb$theta)),
+        zip = sum(predict(model.zip, type = "prob")[,1]),
+        zip1 = sum(predict(model.zip1, type = "prob")[,1]),
+        zinb = sum(predict(model.zinb, type = "prob")[,1]),
+        zinb1 = sum(predict(model.zinb1, type = "prob")[,1])))
+      
+# Compare means.
+round(c("obs" = mean(data$tally),
+        pois = mean(fitted(model.pois)),
+        nb = mean(fitted(model.nb)),
+        zip = mean(predict(model.zip, type = "response")),
+        zip1 = mean(predict(model.zip1, type = "response")),
+        zinb = mean(predict(model.zinb, type = "response")),
+        zinb1 = mean(predict(model.zinb1, type = "response"))))
+
+# Compare medians.
+round(c("obs" = median(data$tally),
+        pois = median(fitted(model.pois)),
+        nb = median(fitted(model.nb)),
+        zip = median(predict(model.zip, type = "response")),
+        zip1 = median(predict(model.zip1, type = "response")),
+        zinb = median(predict(model.zinb, type = "response")),
+        zinb1 = median(predict(model.zinb1, type = "response"))))
+
+
+# Compare log-likelihood (Zeilis 2008)
+list <- list("pois" = model.pois,
+             "nb" = model.nb,
+             "zip" = model.zip,
+             "zip1" = model.zip1,
+             "zinb" = model.zinb,
+             "zinb1" = model.zinb1)
+rbind(logLik = sapply(list, function(x) round(logLik(x),0)),
+      DF = sapply(fm, function(x) attr(logLik(x), "df")))   
+
+
+## is overdispersion taken care of? additional term is signif
+lrtest(model.pois, model.nb) # signif so variance is very diff -- worth addign extra term for overdispersion
+
+lrtest(model.nb, model.zinb1) # not very diff: not worth adding extra term for zero-inflation
+# ^ Provides no evidence to include additional parameter of pien_dist_bin.
+# ^ BUT I DON'T THINK I CAN DO THAT B/C THEY'RE NOT NESTED
+# install.packages("nonnest2")
+library(nonnest2)
+vuongtest(model.nb, model.zip1)
+vuongtest(model.nb, model.zinb1)
+# Model 1 
+#  Class: negbin 
+#  Call: glm.nb(formula = tally ~ dem100 + slp100 + hli100 + tpi100 + ...
+# 
+# Model 2 
+#  Class: zeroinfl 
+#  Call: zeroinfl(formula = tally ~ dem100 + slp100 + hli100 + tpi100 + ...
+# 
+# Variance test 
+#   H0: Model 1 and Model 2 are indistinguishable 
+#   H1: Model 1 and Model 2 are distinguishable 
+#     w2 = 0.000,   p = 1
+# 
+# Non-nested likelihood ratio test 
+#   H0: Model fits are equal for the focal population 
+#   H1A: Model 1 fits better than Model 2 
+#     z = 0.084,   p = 0.466
+#   H1B: Model 2 fits better than Model 1 
+#     z = 0.084,   p = 0.5335
+
+# We see that we obtain two tests, the variance test and the non-nested likelihood ratio test. The former test
+# informs us of the models' distinguishability, while the latter test compares the fits of two distinguishable
+# models. Focusing on the variance test here, we obtain a small test statistic and a large p-value. These results
+# imply that, as we suspected, the two models are indistinguishable in the focal population
+
+
+
+## MODEL SELECTION
+summary(model.nb)
+# drop CTI
+fA <- formula(tally ~ dem100 + slp100 + hli100 + tpi100 + shrub_perc +
+                pien_dist_bin + offset(log(area)))
+mA <- glm.nb(fA, data = data) ; summary(mA)
+lrtest(model.nb, mA) # Var same (p > 0.05) so keep simpler (drop). Next:
+
+fB <- formula(tally ~ dem100 + slp100 + tpi100 + shrub_perc +
+                pien_dist_bin + offset(log(area)))
+mB <- glm.nb(fB, data = data) ; summary(mB)
+lrtest(mB, mA) # Var same (p > 0.05) so keep simpler (drop). Next:
+
+fC <- formula(tally ~ dem100 + slp100 + tpi100 + 
+                pien_dist_bin + offset(log(area)))
+mC <- glm.nb(fC, data = data) ; summary(mC)
+lrtest(mB, mC)# Var same (p > 0.05) so keep simpler (drop). Next:
+
+fD <- formula(tally ~ dem100 + tpi100 + 
+                pien_dist_bin + offset(log(area)))
+mD <- glm.nb(fD, data = data) ; summary(mD)
+lrtest(mD, mC) # p = 0.09 so keep in 
+
+mod.fin <- mC ; summary(mod.fin)
+mod.fin
+
+
+########################### VALIDATION
+
+## Pearson chi-squared test (ok b/c not zero-inflated)
+EP <- resid(mod.fin, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 4), lower.tail=FALSE) # 51 = n and 4 = p (# parameters); same as df.resid
+# Null is that model is correctly specified and here keep null (p=0.6991715)
+
+## Spearman rank
+pred <- predict(mod.fin, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") 
+# rho = 0.5082032 
+
+
+# PSEUDO R^2
+((mod.fin$null.deviance - mod.fin$deviance)/mod.fin$null.deviance) # 0.5036584
+
+
+############################
+## PLOT FOR VALIDATION
+
+options(scipen=999)
+
+# Need to scope out outliers. Zuur quotes: observations with...
+# ...a Cook distance larger than 1, which is the threshold value...
+# ...upon one should take further action (Fox, 2002)
+data[36,] # Kept showing up way out there with mod.fin.rp = 7
+# It's what also showed up with simple (non zero-inflated) -- can't do cooks w/ zeroinf.
+plot(cooks.distance(mod.fin), ylab = "Cooks distance")
+points(36, cooks.distance(model.nb)[36], col = 'red')
+data.update <- data[-36,]
+mod.fin.update <- update(mod.fin, data = data.update)
+mod.fin.dp.update <- residuals(mod.fin.update)
+
+plot(fitted(mod.fin.update), data.update$tally)
+plot(fitted(mod.fin.update), mod.fin.dp.update)
+plot(data.update$tally, mod.fin.dp.update)
+plot(data.update$pien_dist_bin, mod.fin.dp.update)
+
+# But...
+data %>% count(tally) # only 10 sites had pien. Seems crazy to drop one site.
+# Plus, model parameter values don't change (not going back thru re-fit) 
+summary(mod.fin.update) ; summary(mod.fin)
+
+
+
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data.raw <- data.raw %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+data.raw$tally <- data.raw$tally_num
+
+currentDate <- Sys.Date()
+
+dev.off()
+# tiff(paste0("diagnostics.pien_",currentDate,".tif"), width = 6, height = 8, units = "in", res = 200)
+# tiff(paste0("diagnostics.pien.3_",currentDate,".tif"), width = 6, height = 2, units = "in", res = 200)
+# par(mfrow=c(1,1))
+par(mfrow=c(4,3))
+par(mfrow=c(1,3))
+plot(fitted(mod.fin), data$tally, xlab = "fit cnt", ylab = "obs cnt")
+points(fitted(mod.fin)[c()], data$tally[c()], col = "red")
+# ^ Expect 1:1
+plot(fitted(mod.fin), mod.fin.dp, xlab = "fit cnt", ylab = "resid")
+points(fitted(mod.fin)[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect no pattern.
+plot(data$tally, mod.fin.dp, xlab = "obs cnt", ylab = "resid")
+points(data$tally[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect correlation: + resid for lrg values, - resid for sml.
+# B/c resids are what's left when obs-fitted: model predicts more mod values than observed
+plot(data.raw$dem100, residuals(mod.fin), xlab = "elev *", ylab = "resid")
+points(data.raw$dem100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+# ^ Covariate is not in model -- expect no pattern.
+plot(data.raw$slp100, residuals(mod.fin), xlab = "slp", ylab = "resid")
+points(data.raw$slp100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+# ^ Covariate in model -- if there's a pattern, relationship may be nonlinear.
+plot(data.raw$hli100, residuals(mod.fin), xlab = "hli", ylab = "resid")
+points(data.raw$hli100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$cti100, residuals(mod.fin), xlab = "cti", ylab = "resid")
+points(data.raw$cti100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$tpi100, residuals(mod.fin), xlab = "tpi", ylab = "resid")
+points(data.raw$tpi100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$pien_dist_bin, residuals(mod.fin), xlab = "seed dist bin *", ylab = "resid")
+points(data.raw$pien_dist_bin[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$shrub_perc, residuals(mod.fin), xlab = "shrub %", ylab = "resid")
+points(data.raw$shrub_perc[c(36)], residuals(mod.fin)[c(36)], col = "red")
+dev.off()
+
+
+
+# But...
+data %>% count(tally) # only 10 sites had pien. Seems crazy to drop one site.
+# Plus, model parameter values don't change (not going back thru re-fit) 
+summary(mod.fin.update) ; summary(mod.fin)
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- pien_sum_all$long
+data$lat <- pien_sum_all$lat
+Moran_space(data, residuals(mod.fin))
+# Null is no SAC
+```
+
+
+
+### PIPO
+```{r pipo}
+
+data <- pipo_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 21)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, tally=data.raw$tally_num) # add site back on
+data <- data[, c(8,9,10,1,2,3,4,5,6,7)] ; print(data) # re-order
+data$tally[is.na(data$tally)] <- 0
+remove(var.scale)
+
+# Attach look-up table for area sampled at each site
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data <- data %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+
+
+## Poisson
+# Poisson b/c count?
+model.pois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin + offset(log(area)),
+                 data = data, family = (poisson(link = "log")),
+                 maxit = 1000)
+summary(model.pois)
+pois.rp <-resid(model.pois, type = "pearson") 
+n <- nrow(data)
+sum(pois.rp^2)/(51-7) # gives dispersion parameter 36.34068 (Zuur p. 233)
+
+
+## NB
+# Try negative binomial for dispersion
+model.nb = glm.nb(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc +
+                  pipo_dist_bin + offset(log(area)),
+                  data = data,
+                  maxit=1000)
+summary(model.nb)
+nb.rp <-resid(model.nb, type = "pearson") 
+n <- nrow(data)
+sum(nb.rp^2)/(51-7)
+
+
+# Zero-inflated Poisson with distance 
+model.zip <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin + offset(log(area))| pipo_dist_bin,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip)
+zip.rp <- resid(model.zip, type = "pearson")
+n <- nrow(data)
+sum(zip.rp^2)/(51-7)
+
+# Zero-inflated poisson with only intercept
+model.zip1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip1)
+zip1.rp <- resid(model.zip1, type = "pearson")
+n <- nrow(data)
+sum(zip1.rp^2)/(51-7)
+
+
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin + offset(log(area))| pipo_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb)
+zinb.rp <- resid(model.zinb, type = "pearson")
+n <- nrow(data)
+sum(zinb.rp^2)/(51-7)
+
+
+# Zero-inflated negative binomial with only 1
+model.zinb1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + pipo_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb1) ; AIC(model.zinb.1)
+# Confirm theta
+zinb1.rp <- resid(model.zinb1, type = "pearson")
+n <- nrow(data)
+sum(zinb1.rp^2)/(51-7)
+
+AIC(model.pois, model.nb, model.zip, model.zip1, model.zinb, model.zinb1)
+
+
+## Compare predicted number of zeros to observed (Zeilis et al 2008)
+round(c("obs" = sum(data$tally < 1),
+        pois = sum(dpois(0, fitted(model.pois))),
+        nb = sum(dnbinom(0, mu = fitted(model.nb), size = model.nb$theta)),
+        zip = sum(predict(model.zip, type = "prob")[,1]),
+        zip1 = sum(predict(model.zip1, type = "prob")[,1]),
+        zinb = sum(predict(model.zinb, type = "prob")[,1]),
+        zinb1 = sum(predict(model.zinb1, type = "prob")[,1])))
+      
+# Compare means.
+round(c("obs" = mean(data$tally),
+        pois = mean(fitted(model.pois)),
+        nb = mean(fitted(model.nb)),
+        zip = mean(predict(model.zip, type = "response")),
+        zip1 = mean(predict(model.zip1, type = "response")),
+        zinb = mean(predict(model.zinb, type = "response")),
+        zinb1 = mean(predict(model.zinb1, type = "response"))))
+
+# Compare medians.
+round(c("obs" = median(data$tally),
+        pois = median(fitted(model.pois)),
+        nb = median(fitted(model.nb)),
+        zip = median(predict(model.zip, type = "response")),
+        zip1 = median(predict(model.zip1, type = "response")),
+        zinb = median(predict(model.zinb, type = "response")),
+        zinb1 = median(predict(model.zinb1, type = "response"))))
+
+
+# Compare log-likelihood (Zeilis 2008)
+list <- list("pois" = model.pois,
+             "nb" = model.nb,
+             "zip" = model.zip,
+             "zip1" = model.zip1,
+             "zinb" = model.zinb,
+             "zinb1" = model.zinb1)
+rbind(logLik = sapply(list, function(x) round(logLik(x),0)),
+      DF = sapply(fm, function(x) attr(logLik(x), "df")))   
+
+
+
+## is overdispersion taken care of? additional term is signif
+lrtest(model.pois, model.nb) # signif so variance is very diff -- worth addign extra term for overdispersion
+
+# Do I need to take care of zerp-inflation?
+# Use Vuong test b/c these models are NOT nested
+vuongtest(model.nb, model.zip1) # not very diff: not worth adding extra term for 
+vuongtest(model.nb, model.zinb1) # not very diff: not worth adding extra term for zero-inflation
+# ^ Provides no evidence to include additional parameter of pipo_dist_bin.
+
+
+## MODEL SELECTION
+summary(model.nb)
+# drop CTI
+fA <- formula(tally ~ dem100 + slp100 + hli100 + tpi100 + shrub_perc +
+                pipo_dist_bin + offset(log(area)))
+mA <- glm.nb(fA, data = data) ; summary(mA)
+lrtest(model.nb, mA) # Var same (p > 0.05) so keep simpler (drop). Next:
+# drop shrub
+fB <- formula(tally ~ dem100 + slp100 + hli100 + tpi100 + 
+                pipo_dist_bin + offset(log(area)))
+mB <- glm.nb(fB, data = data) ; summary(mB)
+lrtest(mA, mB) # Var same (p > 0.05) so keep simpler (drop). Next:
+# drop dist bin
+fC <- formula(tally ~ dem100 + slp100 + hli100 + tpi100 + 
+                offset(log(area)))
+mC <- glm.nb(fC, data = data) ; summary(mC)
+lrtest(mC, mB) # Var same (p > 0.05) so keep simpler (drop). Next:
+# drop hli
+fD <- formula(tally ~ dem100 + slp100 +tpi100 + 
+                offset(log(area)))
+mD <- glm.nb(fD, data = data) ; summary(mD)
+lrtest(mC, mD) # All are now signif. keep mD
+
+mod.fin <- mD ; summary(mod.fin)
+mod.fin
+
+
+########################### VALIDATION
+
+## Pearson chi-squared test (ok b/c not zero-inflated)
+EP <- resid(mod.fin, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 4), lower.tail=FALSE) # 51 = n and 4 = p (# parameters); same as df.resid
+# Null is that model is correctly specified and here keep null (p=0.6991715)
+
+## Spearman rank
+pred <- predict(mod.fin, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") 
+# rho = 0.7261601 
+
+
+# PSEUDO R^2
+((mod.fin$null.deviance - mod.fin$deviance)/mod.fin$null.deviance) # 0.5036584
+
+
+############################
+## PLOT FOR VALIDATION
+
+options(scipen=999)
+
+# Need to scope out outliers. Zuur quotes: observations with...
+# ...a Cook distance larger than 1, which is the threshold value...
+# ...upon one should take further action (Fox, 2002)
+
+data %>% count(tally)
+summary(mod.fin.update) ; summary(mod.fin)
+
+
+
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data.raw <- data.raw %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+data.raw$tally <- data.raw$tally_num
+
+currentDate <- Sys.Date()
+
+dev.off()
+# tiff(paste0("diagnostics.pipo_",currentDate,".tif"), width = 6, height = 8, units = "in", res = 200)
+# tiff(paste0("diagnostics.pipo.3_",currentDate,".tif"), width = 6, height = 2, units = "in", res = 200)
+# par(mfrow=c(1,1))
+par(mfrow=c(4,3))
+par(mfrow=c(1,2))
+plot(fitted(mod.fin), data$tally, xlab = "fit cnt", ylab = "obs cnt")
+points(fitted(mod.fin)[c()], data$tally[c()], col = "red")
+# ^ Expect 1:1
+plot(fitted(mod.fin), mod.fin.dp, xlab = "fit cnt", ylab = "resid")
+points(fitted(mod.fin)[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect no pattern.
+plot(data$tally, mod.fin.dp, xlab = "obs cnt", ylab = "resid")
+points(data$tally[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect correlation: + resid for lrg values, - resid for sml.
+# B/c resids are what's left when obs-fitted: model predicts more mod values than observed
+plot(data.raw$dem100, residuals(mod.fin), xlab = "elev *", ylab = "resid")
+points(data.raw$dem100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+# ^ Covariate is not in model -- expect no pattern.
+plot(data.raw$slp100, residuals(mod.fin), xlab = "slp", ylab = "resid")
+points(data.raw$slp100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+# ^ Covariate in model -- if there's a pattern, relationship may be nonlinear.
+plot(data.raw$hli100, residuals(mod.fin), xlab = "hli", ylab = "resid")
+points(data.raw$hli100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$cti100, residuals(mod.fin), xlab = "cti", ylab = "resid")
+points(data.raw$cti100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$tpi100, residuals(mod.fin), xlab = "tpi", ylab = "resid")
+points(data.raw$tpi100[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$pipo_dist_bin, residuals(mod.fin), xlab = "seed dist bin *", ylab = "resid")
+points(data.raw$pipo_dist_bin[c(36)], residuals(mod.fin)[c(36)], col = "red")
+plot(data.raw$shrub_perc, residuals(mod.fin), xlab = "shrub %", ylab = "resid")
+points(data.raw$shrub_perc[c(36)], residuals(mod.fin)[c(36)], col = "red")
+dev.off()
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- pipo_sum_all$long
+data$lat <- pipo_sum_all$lat
+Moran_space(data, residuals(mod.fin))
+# Null is no SAC
+
+
+mod.pipo <- mod.fin
+
+```
+
+
+
+### PSME
+```{r psme}
+
+data <- psme_sum_all
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(5, 6, 7, 9, 10, 15, 21)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, tally=data.raw$tally_num) # add site back on
+data <- data[, c(8,9,10,1,2,3,4,5,6,7)] ; print(data) # re-order
+data$tally[is.na(data$tally)] <- 0
+remove(var.scale)
+
+# Attach look-up table for area sampled at each site
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data <- data %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+
+
+## Poisson
+# Poisson b/c count?
+model.pois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin + offset(log(area)),
+                 data = data, family = (poisson(link = "log")),
+                 maxit = 1000)
+summary(model.pois)
+pois.rp <-resid(model.pois, type = "pearson") 
+n <- nrow(data)
+sum(pois.rp^2)/(51-7) # gives dispersion parameter 36.34068 (Zuur p. 233)
+
+
+## NB
+# Try negative binomial for dispersion
+model.nb = glm.nb(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc +
+                  psme_dist_bin + offset(log(area)),
+                  data = data,
+                  maxit=1000)
+summary(model.nb)
+nb.rp <-resid(model.nb, type = "pearson") 
+n <- nrow(data)
+sum(nb.rp^2)/(51-7)
+
+
+# Zero-inflated Poisson with distance 
+model.zip <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin + offset(log(area))| psme_dist_bin,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip)
+zip.rp <- resid(model.zip, type = "pearson")
+n <- nrow(data)
+sum(zip.rp^2)/(51-7)
+
+# Zero-inflated poisson with only intercept
+model.zip1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "poisson", maxit=1000)
+summary(model.zip1)
+zip1.rp <- resid(model.zip1, type = "pearson")
+n <- nrow(data)
+sum(zip1.rp^2)/(51-7)
+
+
+
+# Zero-inflated negative binomial
+model.zinb <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin + offset(log(area))| psme_dist_bin,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb)
+zinb.rp <- resid(model.zinb, type = "pearson")
+n <- nrow(data)
+sum(zinb.rp^2)/(51-7)
+
+
+# Zero-inflated negative binomial with only 1
+model.zinb1 <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc
+                       + psme_dist_bin + offset(log(area))| 1,
+                       data = data, dist = "negbin", maxit=1000)
+summary(model.zinb1) ; AIC(model.zinb.1)
+# Confirm theta
+zinb1.rp <- resid(model.zinb1, type = "pearson")
+n <- nrow(data)
+sum(zinb1.rp^2)/(51-7)
+
+AIC(model.pois, model.nb, model.zip, model.zip1, model.zinb, model.zinb1)
+
+
+## Compare predicted number of zeros to observed (Zeilis et al 2008)
+round(c("obs" = sum(data$tally < 1),
+        pois = sum(dpois(0, fitted(model.pois))),
+        nb = sum(dnbinom(0, mu = fitted(model.nb), size = model.nb$theta)),
+        zip = sum(predict(model.zip, type = "prob")[,1]),
+        zip1 = sum(predict(model.zip1, type = "prob")[,1]),
+        zinb = sum(predict(model.zinb, type = "prob")[,1]),
+        zinb1 = sum(predict(model.zinb1, type = "prob")[,1])))
+      
+# Compare means.
+round(c("obs" = mean(data$tally),
+        pois = mean(fitted(model.pois)),
+        nb = mean(fitted(model.nb)),
+        zip = mean(predict(model.zip, type = "response")),
+        zip1 = mean(predict(model.zip1, type = "response")),
+        zinb = mean(predict(model.zinb, type = "response")),
+        zinb1 = mean(predict(model.zinb1, type = "response"))))
+
+# Compare medians.
+round(c("obs" = median(data$tally),
+        pois = median(fitted(model.pois)),
+        nb = median(fitted(model.nb)),
+        zip = median(predict(model.zip, type = "response")),
+        zip1 = median(predict(model.zip1, type = "response")),
+        zinb = median(predict(model.zinb, type = "response")),
+        zinb1 = median(predict(model.zinb1, type = "response"))))
+
+
+# Compare log-likelihood (Zeilis 2008)
+list <- list("pois" = model.pois,
+             "nb" = model.nb,
+             "zip" = model.zip,
+             "zip1" = model.zip1,
+             "zinb" = model.zinb,
+             "zinb1" = model.zinb1)
+rbind(logLik = sapply(list, function(x) round(logLik(x),0)),
+      DF = sapply(fm, function(x) attr(logLik(x), "df")))   
+
+
+
+## is overdispersion taken care of? additional term is signif
+lrtest(model.pois, model.nb) # signif so variance is very diff -- worth addign extra term for overdispersion
+
+# Do I need to take care of zerp-inflation?
+# Use Vuong test b/c these models are NOT nested
+vuongtest(model.nb, model.zip1)
+vuongtest(model.nb, model.zinb1) # not very diff: not worth adding extra term for zero-inflation
+# ^ Provides no evidence to include additional parameter of psme_dist_bin.
+
+
+## MODEL SELECTION
+summary(model.nb)
+# drop hli
+fA <- formula(tally ~ dem100 + slp100 + cti100 + tpi100 + shrub_perc +
+                psme_dist_bin + offset(log(area)))
+mA <- glm.nb(fA, data = data) ; summary(mA)
+lrtest(model.nb, mA) # Var same (p > 0.05) so keep simpler (drop). Next:
+# drop cti
+fB <- formula(tally ~ dem100 + slp100 + tpi100 + shrub_perc +
+                psme_dist_bin + offset(log(area)))
+mB <- glm.nb(fB, data = data) ; summary(mB)
+lrtest(mB, mA) # Var same (p > 0.05) so keep simpler (drop). Next:
+# drop shrub
+fC <- formula(tally ~ dem100 + slp100 + tpi100 + 
+                psme_dist_bin + offset(log(area)))
+mC <- glm.nb(fC, data = data) ; summary(mC)
+lrtest(mB, mC) # Var same (p > 0.05) so keep simpler (drop). Next:
+# drop tpi
+fD <- formula(tally ~ dem100 + slp100 +
+                psme_dist_bin + offset(log(area)))
+mD <- glm.nb(fD, data = data) ; summary(mD)
+lrtest(mD, mC) # Var same (p > 0.05) so keep simpler (drop). Next:
+# Stop, all are signif.
+
+mod.fin <- mD ; summary(mod.fin)
+mod.fin
+
+
+########################### VALIDATION
+
+## Pearson chi-squared test (ok b/c not zero-inflated)
+EP <- resid(mod.fin, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 3), lower.tail=FALSE) # 51 = n and 4 = p (# parameters); same as df.resid
+# Null is that model is correctly specified and here keep null (p=0.6991715)
+
+## Spearman rank
+pred <- predict(mod.fin, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") 
+
+
+
+# PSEUDO R^2
+((mod.fin$null.deviance - mod.fin$deviance)/mod.fin$null.deviance) # 0.5036584
+
+
+############################
+## PLOT FOR VALIDATION
+
+options(scipen=999)
+
+# Need to scope out outliers. Zuur quotes: observations with...
+# ...a Cook distance larger than 1, which is the threshold value...
+# ...upon one should take further action (Fox, 2002)
+
+data %>% count(tally)
+
+
+
+
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data.raw <- data.raw %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+data.raw$tally <- data.raw$tally_num
+
+currentDate <- Sys.Date()
+
+dev.off()
+tiff(paste0("diagnostics.psme_",currentDate,".tif"), width = 6, height = 8, units = "in", res = 200)
+tiff(paste0("diagnostics.psme.3_",currentDate,".tif"), width = 6, height = 2, units = "in", res = 200)
+par(mfrow=c(1,1))
+par(mfrow=c(4,3))
+par(mfrow=c(1,3))
+plot(fitted(mod.fin), data$tally, xlab = "fit cnt", ylab = "obs cnt")
+points(fitted(mod.fin)[c()], data$tally[c()], col = "red")
+# ^ Expect 1:1
+plot(fitted(mod.fin), mod.fin.dp, xlab = "fit cnt", ylab = "resid")
+points(fitted(mod.fin)[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect no pattern.
+plot(data$tally, mod.fin.dp, xlab = "obs cnt", ylab = "resid")
+points(data$tally[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect correlation: + resid for lrg values, - resid for sml.
+# B/c resids are what's left when obs-fitted: model predicts more mod values than observed
+plot(data.raw$dem100, residuals(mod.fin), xlab = "elev *", ylab = "resid")
+points(data.raw$dem100[c()], residuals(mod.fin)[c()], col = "red")
+# ^ Covariate is not in model -- expect no pattern.
+plot(data.raw$slp100, residuals(mod.fin), xlab = "slp", ylab = "resid")
+points(data.raw$slp100[c()], residuals(mod.fin)[c()], col = "red")
+# ^ Covariate in model -- if there's a pattern, relationship may be nonlinear.
+plot(data.raw$hli100, residuals(mod.fin), xlab = "hli", ylab = "resid")
+points(data.raw$hli100[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$cti100, residuals(mod.fin), xlab = "cti", ylab = "resid")
+points(data.raw$cti100[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$tpi100, residuals(mod.fin), xlab = "tpi", ylab = "resid")
+points(data.raw$tpi100[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$psme_dist_bin, residuals(mod.fin), xlab = "seed dist bin *", ylab = "resid")
+points(data.raw$psme_dist_bin[c()], residuals(mod.fin)[c()], col = "red")
+plot(data.raw$shrub_perc, residuals(mod.fin), xlab = "shrub %", ylab = "resid")
+points(data.raw$shrub_perc[c()], residuals(mod.fin)[c()], col = "red")
+dev.off()
+
+
+# SPATIAL AUTOCORRELATION
+data$long <- psme_sum_all$long
+data$lat <- psme_sum_all$lat
+Moran_space(data, residuals(mod.fin))
+# Null is no SAC
+
+# semivariograms (uses gstat)
+# ref: http://gsp.humboldt.edu/OLM/R/04_01_Variograms.html
+# ref: https://beckmw.wordpress.com/tag/variogram/
+data$x <- psme_sum_all$long
+data$y <- psme_sum_all$lat
+par(mfrow=c(1,1))
+plot(data$x, data$y)
+
+temp <- data.frame(x=data$x, y=data$y, resids=residuals(mod.fin))
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+
+mod.psme <- mod.fin
+
+```
+
+## FIGURES
+```{r FIGURES}
+#######################
+# PLOT PICO
+## Add predictive lines. To plot relationship btwn dist & tpha, make mod only for dist.
+## To plot relationship btwn distance and tpha, create model for only dist.
+data.raw <- pico_sum_all; data.raw$tally <- pico_sum_all$tally_num
+pico_sum_all$tally <- pico_sum_all$tally_num
+mod.pred <- glm.nb(tally ~ pico_dist_bin , data = data.raw, maxit = 1000)
+# plot(data.raw$pico_seed_dist, data.raw$tpha)
+range(data.raw$pico_dist_bin) # 2 to 12. Let's get a range of those
+xdist <- seq(0,14,0.05)
+# Predict with those ranges. Turn tally --> tpha by *0.0393 (ha area of MOST sites)
+pred <- predict(mod.pred, list(pico_dist_bin = xdist), type = "response", se=TRUE)
+seup <- (pred$fit + 1.96 * pred$se.fit)/0.0393 # to project to ha
+sedwn <- (pred$fit - 1.96 * pred$se.fit)/0.0393 # to project to ha
+df <- as.data.frame(cbind(dist=xdist*25, pred = pred$fit/0.0393, seup, sedwn))
+# lines(xdist*25, pred$fit/0.0393, lty = 1) # to project to ha
+# lines(xdist*25, seup, lty = 2) # *25 to set bins back to 25m
+# lines(xdist*25, sedwn, lty = 2) # *25 to set bins back to 25m
+# ^ These work to add on top of simple plot, but not ggplot2...
+# stat_function in ggplot only works with dataframe in aes
+
+# Don't define aes up-front b/c need diff data sources
+pico.plot <- ggplot() + 
+  geom_point(data = pico_sum_all, aes(x=pico_seed_dist, y=tpha),
+                                      shape = 16, alpha=1/2, size=3,
+                                      position = position_jitter(width=1,height=1)) +
+  geom_line(data = df, aes(x=dist, y = pred), lty = 1) +
+  geom_line(data = df, aes(x=dist, y = seup), lty = 2) +
+  geom_line(data = df, aes(x=dist, y = sedwn), lty = 2) +
+  labs(x = "Distance to live conspecific seed source (m)",
+       y="Juvenile density (stems/ha)") +
+  xlim(0,250) +
+  theme_caitlin() +
+  annotate("text", x = 216, y = 28800, label = "lodgepole pine")
+pico.plot ; p1 <- pico.plot
+
+
+#######################
+# PLOT pipo
+## Add predictive lines. To plot relationship btwn dist & tpha, make mod only for dist.
+## To plot relationship btwn distance and tpha, create model for only dist.
+data.raw <- pipo_sum_all; data.raw$tally <- pipo_sum_all$tally_num
+mod.pred <- glm.nb(tally ~ pipo_dist_bin , data = data.raw, maxit = 1000)
+# plot(data.raw$pipo_seed_dist, data.raw$tpha)
+range(data.raw$pipo_dist_bin) # 2 to 12. Let's get a range of those
+xdist <- seq(0,14,0.05)
+# Predict with those ranges. Turn tally --> tpha by *0.0393 (ha area of MOST sites)
+pred <- predict(mod.pred, list(pipo_dist_bin = xdist), type = "response", se=TRUE)
+seup <- (pred$fit + 1.96 * pred$se.fit)/0.0393 # to project to ha
+sedwn <- (pred$fit - 1.96 * pred$se.fit)/0.0393 # to project to ha
+df <- as.data.frame(cbind(dist=xdist*25, pred = pred$fit/0.0393, seup, sedwn))
+
+# Don't define aes up-front b/c need diff data sources
+pipo.plot <- ggplot() + 
+  geom_point(data = pipo_sum_all, aes(x=pipo_seed_dist, y=tpha),
+                                      shape = 16, alpha=1/2, size=3,
+                                      position = position_jitter(width=1,height=1)) +
+  geom_line(data = df, aes(x=dist, y = pred), lty = 1) +
+  geom_line(data = df, aes(x=dist, y = seup), lty = 2) +
+  geom_line(data = df, aes(x=dist, y = sedwn), lty = 2) +
+  labs(x = "Distance to live conspecific seed source (m)",
+       y="Juvenile density (stems/ha)") +
+  xlim(0,300) +
+  theme_caitlin() +
+  annotate("text", x = 253, y = 3150, label = "ponderosa pine")
+pipo.plot ; p2 <- pipo.plot
+
+
+
+#################################
+# LODGEPOLE BOXPLOT
+pico_sum_all$site_air_seed <- as.factor(pico_sum_all$site_air_seed)
+pico.box <- ggplot(pico_sum_all, aes(x=site_air_seed, y=tpha))
+
+p3 <- pico.box + geom_boxplot() +
+  labs(x = "Extant cones on snags", y = "Juvenile density (stems/ha)") + 
+  theme_caitlin() +
+  scale_x_discrete(labels = c("not present", "present")) +
+  annotate("text", x = 0.8, y = 28800, label = "lodgepole pine")
+p3
+
+
+#######################
+# PLOT psme
+## Add predictive lines. To plot relationship btwn dist & tpha, make mod only for dist.
+## To plot relationship btwn distance and tpha, create model for only dist.
+data.raw <- psme_sum_all; data.raw$tally <- psme_sum_all$tally_num
+mod.pred <- glm.nb(tally ~ psme_dist_bin , data = data.raw, maxit = 1000)
+# plot(data.raw$psme_seed_dist, data.raw$tpha)
+range(data.raw$psme_dist_bin) # 2 to 12. Let's get a range of those
+xdist <- seq(0,10,0.05)
+# Predict with those ranges. Turn tally --> tpha by *0.0393 (ha area of MOST sites)
+pred <- predict(mod.pred, list(psme_dist_bin = xdist), type = "response", se=TRUE)
+seup <- (pred$fit + 1.96 * pred$se.fit)/0.0393 # to project to ha
+sedwn <- (pred$fit - 1.96 * pred$se.fit)/0.0393 # to project to ha
+df <- as.data.frame(cbind(dist=xdist*25, pred = pred$fit/0.0393, seup, sedwn))
+
+# Don't define aes up-front b/c need diff data sources
+psme.plot <- ggplot() + 
+  geom_point(data = psme_sum_all, aes(x=psme_seed_dist, y=tpha),
+                                      shape = 16, alpha=1/2, size=3,
+                                      position = position_jitter(width=1,height=1)) +
+  geom_line(data = df, aes(x=dist, y = pred), lty = 1) +
+  geom_line(data = df, aes(x=dist, y = seup), lty = 2) +
+  geom_line(data = df, aes(x=dist, y = sedwn), lty = 2) +
+  labs(x = "Distance to live conspecific seed source (m)",
+       y="Juvenile density (stems/ha)") +
+  xlim(0,160) +
+  theme_caitlin() +
+  annotate("text", x = 16, y = 1600, label = "Douglas-fir")
+psme.plot ; p4 <- psme.plot
+
+
+
+
+
+
+
+png("//goshawk.sefs.uw.edu/Space_Lawler/Shared/BackedUp/Caitlin/Tripod/Dir/tpha_vs_seed_dist_spp_2019-03-18.png", units = "in", width = 8, height = 6, res = 600)
+# png("D:/Shared/BackedUp/Caitlin/Tripod/Dir/tpha_vs_seed_dist_spp_2019-03-18.png", units = "in", width = 8, height = 6, res = 600)
+multiplot(p1, p2, p3, p4, cols=2)
+dev.off()
+```

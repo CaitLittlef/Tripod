@@ -113,20 +113,20 @@ source("Tripod_04_Functions.R")
 
 
 # ## SHORT-CUTS
-remove(abla_sum)
-remove(laoc_sum)
-remove(pico_sum)
-remove(pien_sum)
-remove(pipo_sum)
-remove(psme_sum)
-# #
-remove(abla_sum_all)
-remove(laoc_sum_all)
-remove(pico_sum_all)
-remove(pien_sum_all)
-remove(pipo_sum_all)
-remove(psme_sum_all)
-
+# remove(abla_sum)
+# remove(laoc_sum)
+# remove(pico_sum)
+# remove(pien_sum)
+# remove(pipo_sum)
+# remove(psme_sum)
+# # #
+# remove(abla_sum_all)
+# remove(laoc_sum_all)
+# remove(pico_sum_all)
+# remove(pien_sum_all)
+# remove(pipo_sum_all)
+# remove(psme_sum_all)
+# 
 
 
 ###FIXME:

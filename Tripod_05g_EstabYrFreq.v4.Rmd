@@ -274,13 +274,14 @@ abla_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
   labs(x = NULL, y = "Density (stems/ha)") +
   theme_caitlin() + 
   theme(legend.position= "none") +
-  # annotate with name of spp, set at top of graph (there's spaec b/c limit is  2.05)
-  annotate("text", x =1, y = max(data$tpha.new) * 1.1, label = "subalpine fir", hjust= 0)
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size=12), axis.title=element_text(size=14)) +
+    # annotate with name of spp, set at top of graph (there's spaec b/c limit is  2.05)
+  annotate("text", x =1, y = max(data$tpha.new) * 1.1, label = "subalpine fir", hjust= 0, size = 6)
 abla_plot
 temp <- abla_plot
 abla_plot <- ggplotGrob(abla_plot) # If I don't save as object, seems to get re-drawn and loses axes
 currentDate <- Sys.Date()
-ggsave(paste0("estab_abla_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+# ggsave(paste0("estab_abla_spei_amjj_",currentDate,".png"), width = 5, height = 3)
 dev.off()
 
 
@@ -310,11 +311,12 @@ laoc_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
   labs(x = NULL, y = "Density (stems/ha)") +
   theme_caitlin() +
   theme(legend.position= "none") +
-  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "western larch", hjust= 0)
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size=12), axis.title=element_text(size=14)) +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "western larch", hjust= 0, size = 6)
 laoc_plot
 laoc_plot <- ggplotGrob(laoc_plot)
 currentDate <- Sys.Date()
-ggsave(paste0("estab_laoc_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+# ggsave(paste0("estab_laoc_spei_amjj_",currentDate,".png"), width = 5, height = 3)
 dev.off()
 
 
@@ -343,11 +345,12 @@ pico_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
   labs(x = NULL, y = "Density (stems/ha)") +
   theme_caitlin() + 
   theme(legend.position= "none") +
-  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "lodgepole pine", hjust= 0)
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size=12), axis.title=element_text(size=14)) +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "lodgepole pine", hjust= 0, size = 6)
 pico_plot
 pico_plot <- ggplotGrob(pico_plot)
 currentDate <- Sys.Date()
-ggsave(paste0("estab_pico_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+# ggsave(paste0("estab_pico_spei_amjj_",currentDate,".png"), width = 5, height = 3)
 dev.off()
 
 ###PIEN########################################################################
@@ -375,11 +378,12 @@ pien_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
   labs(x = NULL, y = "Density (stems/ha)") +
   theme_caitlin() + 
   theme(legend.position= "none") +
-  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "Englemann spruce", hjust= 0)
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size=12), axis.title=element_text(size=14)) +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "Englemann spruce", hjust= 0, size = 6)
 pien_plot
 pien_plot <- ggplotGrob(pien_plot)
 currentDate <- Sys.Date()
-ggsave(paste0("estab_pien_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+# ggsave(paste0("estab_pien_spei_amjj_",currentDate,".png"), width = 5, height = 3)
 dev.off()
 
 
@@ -408,7 +412,8 @@ pipo_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
   labs(x = NULL, y = "Density (stems/ha)") +
   theme_caitlin() + 
   theme(legend.position= "none") +
-  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "ponderosa pine", hjust= 0)
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size=12), axis.title=element_text(size=14)) +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "ponderosa pine", hjust= 0, size = 6)
 pipo_plot
 pipo_plot <- ggplotGrob(pipo_plot)
 currentDate <- Sys.Date()
@@ -440,12 +445,13 @@ psme_plot <- ggplot(data, aes(x = estab_yr, y = tpha.new)) +
   labs(x = NULL, y = "Density (stems/ha)") +
   theme_caitlin() + 
   theme(legend.position= "none") +
-  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "Douglas-fir", hjust= 0)
+  theme(axis.text.x = element_text(size = 10), axis.text.y = element_text(size=12), axis.title=element_text(size=14)) +
+  annotate("text", x = 1, y = max(data$tpha.new) * 1.1, label = "Douglas-fir", hjust= 0, size = 6)
 psme_plot
 temp <- psme_plot
 psme_plot <- ggplotGrob(psme_plot)
 currentDate <- Sys.Date()
-ggsave(paste0("estab_psme_spei_amjj_",currentDate,".png"), width = 5, height = 3)
+# ggsave(paste0("estab_psme_spei_amjj_",currentDate,".png"), width = 5, height = 3)
 dev.off()
 
 ###LEGEND########################################################################
@@ -504,6 +510,7 @@ grid.newpage()
 grid.draw(g)
 
 # grid.arrange(g, legend, ncol = 1) # legend space is way too big
+# install.packages("cowplot")
 library(cowplot)
 currentDate <- Sys.Date()
 png(paste0("estab_all_spei_amjj_",currentDate,".png"),

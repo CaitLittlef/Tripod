@@ -1,0 +1,462 @@
+---
+title: "DENSITY"
+author: "CaitLittlef"
+date: "May 22, 2017"
+output: html_document
+editor_options: 
+  chunk_output_type: console
+---
+
+### NOTES
+Must run Tripod_00_Main.R (and sourced codes therein) before proceeding!
+
+N.b., skipping Poisson b/c of overdispersion & going right to negative binomial GLM. Skipping quantile regression b/c impossible to interpret.
+
+Re: fitting models
+A SATURATED MODEL assumes each data pt has own parameters (i.e., there are n parameters to estimate). A NULL MODEL assumes exact "opposite" - assumes 1 parameter for all data points, so you only estiamte 1. A PROPOSED MODEL assumes I can explain data pts with p parameters + an intercept term, so I have p+1 parameters. If NULL DEVIANCE is really small, NULL MODEL explains data well (i.e., with nothing but an intercept -- just the average of the response). Same w/ RESIDUAL DEVIANCE: how well model w/ predictors predict responses. Increase in deviance shows lack of fit. Remember, df = # obs - # predictors. df are # of independent pieces of info that go into estimate of a parameter. In gen, df of an estimate of a parameter equals # independent scores that go into estimate minus # of parameters used as intermediate steps in the estimate of the parameter itself. Goodness of fit tests H0: model fits vs. HA: model doesn't fit -- i.e., incorrectly specified. To calculate p-value for deviance GOF test, calculate probability to the right of the deviance value for the chi-squared distribution on model df -- this is OK for neg bin b/c neg bin has Poisson nested inside (same structure) plus extra parameter to model the over-dispersion.
+
+### SET-UP
+```{r TWEAKS}
+
+data <- spp_sum
+data$x <- data$long
+data$y <- data$lat
+data$shrub_perc <- (data$shrub_perc/100)
+
+# Scale data for ease of comparison across variables. Also, range of raw values...
+# ... sometimes causes glm to fail (NaNs produced). Scaling centers then divids by SD.
+# For reporting any percentage changes (Incident Rate Ratios), use raw vaules.
+data.raw <- data # for safe-keeping
+colnames(data.raw)
+var.scale <- scale(data[, c(2, 5, 6, 7, 9, 10, 15)]) # centers and divides by SD
+data <- data.frame(var.scale, site=data.raw$site, tpha=data.raw$tpha, tally=data.raw$tally_num) # add site back on
+data <- data[, c(8,9,10,2,3,4,5,6,1,7)] # re-order
+remove(var.scale)
+
+# Attach look-up table for area sampled at each site
+area <- read.csv("LU_SITE_AREA_190308.csv")
+
+data <- data %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+
+```
+
+
+### COUNT
+```{r COUNT}
+# N.b., all these have raw counts with area offset
+
+# Poisson b/c count?
+model.pois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + min_live_seed_dist + offset(log(area)),
+                 data = data,
+                 family = (poisson(link = "log")),
+                 maxit = 100) 
+summary(model.pois)
+
+# model.pois.null = glm(tally ~ 1 + offset(log(area)), data = data, family = (poisson(link = "log")))
+# summary(model.pois.null)
+# Adding/nixing offset doesn't change df.null or df.resid, which is 50.
+
+# estimating disperion parameter: take pearson (standarized) resids, sq, add, divide by n-p. See Zuur p. 233.
+# where p is regression parameters (slopes) in the model
+pois.rp <-resid(model.pois, type = "pearson") 
+n <- nrow(data)
+sum(pois.rp^2)/(51-7) # gives dispersion parameter 116 way too high
+
+
+# Quasi-poisson to account for dispersion (downside, no auto stepAIC)
+model.qpois = glm(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc +
+                 min_live_seed_dist + offset(log(area)),
+                 data = data,
+                 family = (quasipoisson(link = "log")),
+                 maxit = 100) 
+summary(model.qpois) 
+qpois.rp <-resid(model.qpois, type = "pearson") 
+n <- nrow(data)
+sum(qpois.rp^2)/(51-7) # still gives dispersion parameter 116 way too high
+
+
+# Try negative binomial for dispersion
+model.nb = glm.nb(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc +
+                  min_live_seed_dist + offset(log(area)),
+                  data = data,
+                  maxit=100)
+summary(model.nb)
+nb.rp <-resid(model.nb, type = "pearson") 
+n <- nrow(data)
+sum(nb.rp^2)/(51-7) # dispersion 1.358914 big improvement over poisson. 
+
+
+# There aren't too many zeros for this all-spp count, but for practice...
+model.zinb <- zeroinfl(tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 +
+                           shrub_perc + min_live_seed_dist + offset(log(area))
+                           | min_live_seed_dist,
+                           data = data,
+                           dist = "negbin", maxit = 1000)
+# Nope -- won't even run b/c min count isn't zero
+
+
+# Per dispersion parameter (theta), I have to deal with overdispersion.
+# Confirm with likelihood ratio test, which can use b/c NB & Poisson are nested:
+# Poisson is a restricted NB (holds dispersion parameter constant).
+# H0 says that models will have the same variance (see Zuur 238).
+
+# Three ways:
+# 1) pscl::odTest specifically compares NB & Poisson
+odTest(model.nb) # Null of Pois restriction rejected in favor of NB
+# Critical value of test statistic at the alpha= 0.05 level: 2.7055 
+# Chi-Square Test Statistic =  3839.5855 p-value = < 2.2e-16
+
+# 2) lmtest::lrtest
+library(lmtest)
+lrtest(model.nb, model.pois) # do full then smaller
+# Likelihood ratio test
+# 
+# Model 1: tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + 
+#     min_live_seed_dist + offset(log(area))
+# Model 2: tally ~ dem100 + slp100 + hli100 + tpi100 + cti100 + shrub_perc + 
+#     min_live_seed_dist + offset(log(area))
+#   #Df   LogLik Df  Chisq Pr(>Chisq)    
+# 1   8 -2208.98                         
+# 2   9  -289.19  1 3839.6  < 2.2e-16 ***
+# ---
+# Signif. codes:  0 '***' 0.001 '**' 0.01 '*' 0.05 '.' 0.1 ' ' 1
+
+
+# 3) Per Zuur 238, divide p by 2 to show strong support for NB
+llhNB = logLik(model.nb)
+llhPois = logLik(model.pois)
+d <- 2 * (llhNB - llhPois) # this is the statistic: 3840
+pval <- 0.5 * pchisq(as.numeric(d), df = 1,
+                     lower.tail = FALSE) # p-val = 0
+# N.b., lower.tail = F means look to smaller part of bell-curve -- past critical value.
+# LR test of Pois vs. NB is non-standard b/c parameter theta = infinity is on boundary of parameter space.
+# Therefore p-value from X^2 dist must be halved (like with wanting 2-tailed test: clear higher hurdle).
+# Zuur p. 238 & https://stats.stackexchange.com/questions/127505/compare-poisson-and-negative-binomial-regression-with-lr-test
+
+## How bout AIC?
+AIC(model.pois, model.qpois, model.nb)
+
+
+## Compare predicted number of zeros to observed (Zeilis et al 2008)
+round(c("obs" = sum(data$tally < 1),
+        pois = sum(dpois(0, fitted(model.pois))),
+        qpois = sum(dpois(0, fitted(model.qpois))),
+        nb = sum(dnbinom(0, mu = fitted(model.nb), size = model.nb$theta))))
+# ^ These all predict zero zeros.
+
+## Compare coeffs (also Zeilis et al. 2008)
+fm <- list("pois" = model.pois,
+           "qpois" = model.qpois,
+           "nb" = model.nb)
+sapply(fm, function(x) coef(x)[1:8])
+
+# Compare means -- but is this tricky b/c tally doesn't consider diffs in area without offset?
+# Maybe not an issue as fitted values should be predicting that tally for any given observation.
+round(c("obs" = mean(data$tally),
+        pois = mean(fitted(model.pois)),
+        qpois = mean(fitted(model.qpois)),
+        nb = mean(fitted(model.nb)),
+        nb.step = mean(fitted(model.nb.step))))
+
+
+
+list <- list("pois" = model.pois,
+             "nb" = model.nb)
+rbind(logLik = sapply(list, function(x) round(logLik(x),0)),
+      DF = sapply(fm, function(x) attr(logLik(x), "df")))
+
+
+# ^ Everything above suggests that neg bin is appropriate. 
+# For individ spp test, overdispersion may be caused by zeros...
+# so, evaluate zero-inflated Pois & zero-inflated NB
+
+
+
+## Model calibration: use stepAIC to determine variables to retain:
+model.nb.step <- stepAIC(model.nb, direction = "backward", scope = .~.^2)
+# AIC value itself isn't meaningful (e.g,. compared to R^2), but relative values are.
+# AIC balances trade-off between the goodness of fit of the model and the simplicity of the model.
+summary(model.nb.step) ; formula(model.nb.step)
+
+
+## Get AIC & BIC (one interpretation of difference:
+# AIC says "spurious effects" don't become easier to detect as n increases...
+#... or that we don't care if they enter the model, whereas BIC says they do)
+AIC(model.pois, model.qpois, model.nb, model.nb.step)
+BIC(model.pois, model.qpois, model.nb, model.nb.step)
+
+
+## Ok, so NB is best. How do I show fit?
+# The goodness-of-fit test based on deviance is a likelihood-ratio test between the fitted model & the saturated one (one in which each observation gets its own parameter). Pearson's test is a score test; the expected value of the score (the first derivative of the log-likelihood function) is zero if the fitted model is correct, & you're taking a greater difference from zero as stronger evidence of lack of fit. 
+# https://stats.stackexchange.com/questions/77522/deviance-vs-pearson-goodness-of-fit
+# BUT, cannot apply to zero-inflated.
+# Scaled deviance, defined as D = 2 * (log-likelihood of saturated model minus log-likelihood of fitted model), is often used as a measure of goodness-of-fit in GLM models. Percent deviance explained, defined as [D(null model) - D(fitted model)] / D(null model), is also sometimes used as the GLM analog to linear regression's R-squared. Aside from the fact that ZIP and ZINB distributions are not part of the exponential family of distributions, I'm having trouble understanding why scaled deviance and percent deviance explained are not used in zero-inflated modeling.
+# Response: Zero-inflated models are mixed and not true glms therefore don't have deviance. 
+# https://stats.stackexchange.com/questions/203718/measure-of-deviance-for-zero-inflated-poisson-or-zero-inflated-negative-binomi
+
+
+# ## Proportional increase in explained deviance (aka pseudo R^2, named by Dobson; p. 218 Zuur); * 100
+# # null dev = resid dev = 50 b/c it's dfSat-dfNull & dfSat-dfProp: 51 - 1 parameter in both cases.
+model.nb.null = glm.nb(tally ~ 1 + offset(log(area)), data = data, maxit=1000)
+((deviance(model.nb.null) - deviance(model.nb.step))/deviance(model.nb.null))
+((model.nb.step$null.deviance - model.nb.step$deviance)/model.nb.step$null.deviance)
+# # ^ These two don't match. Latter is what Zuur uses. dev(null) gives 58 whereas $null.dev gives 74. Not sure why. Per this post: https://stats.stackexchange.com/questions/108995/interpreting-residual-and-null-deviance-in-glm-r/113022#11302
+# # Null Deviance = 2(LL(Saturated Model) - LL(Null Model)) on df = df_Sat - df_Null
+# # Residual Deviance = 2(LL(Saturated Model) - LL(Proposed Model)) on df = df_Sat - df_Proposed
+# # Saturated model assumes each data point has its own parametres (therefore n parameters to estimate)
+# 
+# ################# NOT SURE ON THIS
+# ## Comparing null to my model (not fully saturated, which would give variable for very datapt)
+# # Difference between null deviance and model deviance is approx X^2
+# # Null deviance: how well response var is predicted only by intercept (ie grand mean).
+# # H0: 'the model as a whole is no better than the null model'. If H0 rejected, conclude data are not consistent with null model. (N.b., doesn't necessarily mean that model is 'good' or 'correct').
+# # https://stats.stackexchange.com/questions/108995/interpreting-residual-and-null-deviance-in-glm-r/113022#113022
+# model.nb.step ; summary(model.nb.step)
+# pchisq((model.nb.step$null.deviance - model.nb.step$deviance),
+#        df=(model.nb.step$df.null - model.nb.step$df.residual),
+#        lower.tail=FALSE)
+# # Explicitly specified:
+# pchisq((74.979 - 56.840), df = (50 - 47), lower.tail = FALSE) # pval 0.0004117479
+# # Data are not consistent with the null model
+
+
+# ## ^ That's of null versus full model, but ...
+# # others talk about badness of fit using Pearson (standardized) residual, which is NOT default deviance in R...
+# # which suggests that obiquitous test below is NOT legit:
+# pchisq(model.nb.step$deviance, df=model.nb.step$df.residual, lower.tail=FALSE)
+# # I asked here: https://stats.stackexchange.com/questions/396876/goodness-of-fit-glm-pearsons-residuals-or-deviance-residuals
+
+
+# Rather, Pearson X^2 statistic is sum of squared Pearson residuals.
+# See Dobson & Barnett 2008 p. 135 & Zuur p. 229 -- ok for Pois & NB (maybe) but not ZIP/ZINB.
+# http://pj.freefaculty.org/guides/stat/Regression-GLM/GLM2-SigTests/GLM-2-guide.pdf (saved in stats folder)
+summary(model.nb.step)
+EP <- resid(model.nb.step, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 4), lower.tail=FALSE) # 51 = n and 4 = p (# parameters -- above in lrtest, offset didn't change df, but theta did; same as df.resid
+# Null is that model is correctly specified and here (p=0.112), don't reject null: ourmodel is ok.
+
+# Whereas what's given in $deviance is just deviance residuals...
+# ...which is the glm equilvalent to resid sum of squares -- the smaller the better
+EP <- resid(model.nb.step, type = "pearson")
+ED <- resid(model.nb.step, type = "deviance")
+sum(EP^2) # 59.05
+sum(ED^2) # 56.84
+model.nb.step$deviance # 56.84041
+ 
+
+
+## Speaman rank of predicted versus observed
+pred <- predict(model.nb.step, type = "response") # get on scale of response variable
+plot(pred, data$tally)
+cor.test(pred, data$tally, method = "spearman") # Rho = 0.4948
+
+
+
+## PLOT FOR VALIDATION. N.b., Pearson resids "look" way worse
+# plot(model.nb.step)
+mod.fin.rp <- resid(model.nb.step, type = "pearson")
+mod.fin.dp <- resid(model.nb.step, type = "deviance")
+plot(cooks.distance(model.nb.step), ylab = "Cooks distance")
+points(c(37,43), cooks.distance(model.nb.step)[c(37,43)], col = "red")
+
+
+# Update model without high leverage points
+par(mfrow=c(1,1))
+data.up <- data[-c(37,43),]
+mod.up <- update(model.nb.step, data = data.up)
+mod.up.dp <- resid(mod.up)
+summary(mod.up)
+plot(fitted(mod.up), data.up$tally)
+plot(fitted(mod.up), mod.up.dp)
+plot(data.up$tally, mod.up.dp)
+
+# Spearman on update
+pred <- predict(mod.up, type = "response") # get on scale of response variable
+plot(pred, data.up$tally)
+cor.test(pred, data.up$tally, method = "spearman") # Rho = 0.4948
+
+# Fit on update
+EP <- resid(mod.up, type = "pearson")
+pchisq(sum(EP^2), df = (51 - 4), lower.tail=FALSE)
+# ^ Yes, improvement, but parameter values do not change substantially
+
+
+# Below, plot series of diagnostics. N.b., data.raw are used -- not scaled values.
+# Below, I'm highlighting apparant outliers; alternative is to include this in plot():
+# col=ifelse(data$tally > 500, "red", "black")
+# Tried to add background to individ covariate plots if they're in model, but to no avail...
+# ... b/c can't add = TRUE with plot (and would need to plot first, add bckgrnd, plot again)
+# rect(par("usr")[1],par("usr")[3],par("usr")[2],par("usr")[4],col = "grey")
+# ^ "usr" is vector c(x1, x3, y1, y2) giving extremes of user coords in plot
+# https://stackoverflow.com/questions/41601895/separate-background-color-for-each-plot-in-multiple-plots
+
+area <- read.csv("LU_SITE_AREA_190308.csv")
+data.raw <- data.raw %>%
+  left_join(area, by = c("site" = "Site")) %>%
+  dplyr::rename(area = AREA_SAMPLED_HA)
+data.raw$tally <- data.raw$tally_num
+currentDate <- Sys.Date()
+
+dev.off()
+# tiff(paste0("diagnostics.all_",CurrentDate,".tif"), width = 6, height = 8, units = "in", res = 200)
+# tiff(paste0("diagnostics.all.3_",currentDate,".tif"), width = 6, height = 2, units = "in", res = 200)
+# par(mfrow=c(1,1))
+par(mfrow=c(4,3))
+par(mfrow=c(1,3))
+plot(fitted(model.nb.step), data$tally, xlab = "fit cnt", ylab = "obs cnt")
+points(fitted(model.nb.step)[c()], data$tally[c()], col = "red")
+# ^ Expect 1:1
+plot(fitted(model.nb.step), mod.fin.dp, xlab = "fit cnt", ylab = "resid")
+points(fitted(model.nb.step)[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect no pattern.
+plot(data$tally, mod.fin.dp, xlab = "obs cnt", ylab = "resid")
+points(data$tally[c()], mod.fin.dp[c()], col = "red")
+# ^ Expect correlation: + resid for lrg values, - resid for sml.
+# B/c resids are what's left when obs-fitted: model predicts more mod values than observed
+plot(data.raw$dem100, residuals(model.nb.step), xlab = "elev", ylab = "resid")
+points(data.raw$dem100[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+# ^ Covariate is not in model -- expect no pattern.
+plot(data.raw$slp100, residuals(model.nb.step), xlab = "slp *", ylab = "resid")
+points(data.raw$slp100[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+# ^ Covariate in model -- if there's a pattern, relationship may be nonlinear.
+plot(data.raw$hli100, residuals(model.nb.step), xlab = "hli", ylab = "resid")
+points(data.raw$hli100[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+plot(data.raw$cti100, residuals(model.nb.step), xlab = "cti", ylab = "resid")
+points(data.raw$cti100[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+plot(data.raw$tpi100, residuals(model.nb.step), xlab = "tpi", ylab = "resid")
+points(data.raw$tpi100[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+plot(data.raw$min_live_seed_dist, residuals(model.nb.step), xlab = "seed dist *", ylab = "resid")
+points(data.raw$min_live_seed_dist[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+plot(data.raw$shrub_perc, residuals(model.nb.step), xlab = "shrub % *", ylab = "resid")
+points(data.raw$shrub_perc[c(37,43)], residuals(model.nb.step)[c(37,43)], col = "red")
+dev.off()
+
+
+
+
+  
+## Get coefficients
+(est.nb.step <- cbind(Estimate = coef(model.nb.step), confint(model.nb.step)))
+summary(model.nb.step)
+```
+
+
+
+
+
+
+### NB RESIDUAL SAC
+```{r NB RESIDUAL SAC}
+
+# Great explanation.
+# https://stackoverflow.com/questions/21039681/spatial-autocorrelation-analysis-global-morans-i-in-r
+# H0: no correlation.
+
+# Moran_space defined as
+# function(x, y)
+# {cbind(x$long, x$lat) %>%
+#     dist(.) %>%
+#     as.matrix(.) %>%
+#     .^(-1) -> temp
+#   diag(temp) <- 0
+#   Moran.I(y, temp)}
+
+# ^ which uses Moran.I, giving
+# obs: computed Moran's I
+# exp: expected value of I under null
+# sd
+# p-value
+
+data$long <- spp_sum$long
+data$lat <- spp_sum$lat
+# Test to see if residuals of my model are spatially autocorrelated
+Moran_space(data, model.nb$residuals)
+Moran_space(data, model.nb.step$residuals)
+# Null is no SAC
+
+# semivariograms (uses gstat)
+# ref: http://gsp.humboldt.edu/OLM/R/04_01_Variograms.html
+# ref: https://beckmw.wordpress.com/tag/variogram/
+data$x <- spp_sum$long
+data$y <- spp_sum$lat
+par(mfrow=c(1,1))
+plot(data$x, data$y)
+
+temp <- data.frame(x=data$x, y=data$y, resids=model.nb.step$residuals)
+model.vgm <- variogram(resids ~ 1, location = ~x+y, data = temp)
+plot(model.vgm)
+
+```
+
+
+
+
+
+
+
+``` {r OTHER}
+par(mfrow=c(2,2))
+plot(model.nb.step) # R very kindly spits out built-in diagnostics (but I don't get predicted values on x axis...)
+# 1) Resid vs. fitted: expect equally spread resids around horiz line w/o distinct pattern.
+# 2) Normal Q-Q: expect resids lined well on straight-line
+# 3) Scale-location: spread equally along range of predictors? This checks assumption of = variance. Want the overlaid lowess curve to be flat.
+# ... i.e., homoscedasticity. Should see horizontal line w/ equally (random) spread points
+# 4) Resid vs. leverage: are there influential cases? Upper right & lower right have high Cooks distance
+# ... regression will be altered if we exclude these cases that have high Cooks distance scores.
+# Datapoints that are towards extreme will push/pull harder on lever (i.e., regression line).
+# Cooks says how far predicted values for data would move if model fitted WITHOUT datapt in question.
+par(mfrow=c(1,1))
+dev.off()
+
+
+
+# Un-scaled version for interpretation of incremental changes to covariates.
+model.nb.step.raw = glm.nb(tally ~ slp100 + shrub_perc + min_live_seed_dist + offset(log(area)),
+                           data = data.raw,
+                           maxit = 100)
+summary(model.nb.step)
+
+(est.nb.step.raw <- cbind(Estimate = coef(model.nb.step.raw), confint(model.nb.step.raw)))
+# Remember, in this model, there's a multiplicative relationship btwn x & y.
+# These coefficients have an ADDITIVE effect when in the ln(y) scale...
+#...and a MULTIPLICATIVE effect in y scale. So, exponentiating won't give...
+# simple "for every unit increaese in min_live_seed_dist, I get 10x more tpha".
+# Instead, for one unit increase in seed dist, tpha will be * by exp(-0.01038749)=0.9896663
+# Exponentiating coefficients gives Incident Rate Ratios.
+exp(est.nb.step.raw)
+#                        Estimate        2.5 %       97.5 %
+# (Intercept)        1.840908e+04 8848.3952217 4.048252e+04
+# shrub_perc         6.517006e-02    0.0176260 2.482590e-01
+# min_live_seed_dist 9.896663e-01    0.9813415 9.993233e-01 <-- 0.9896663 * original outcome...
+# (...i.e., prior to adding one additional unit of min_live_seed_dist.)
+# So, every increase in min_live_seed_dist results in 2% decrease tpha.
+
+```
+
+
+
+
+
+### FIGURES
+```{r FIGURES}
+
+p1 <- ggplot(spp_sum, aes(x=min_live_seed_dist, y=tpha)) 
+p1 + geom_point(shape = 16, alpha=1/2, size=6,
+                position = position_jitter(width=1,height=1)) +
+  theme_bw() +
+  labs(x = "Distance to live seed source (m)", y="Juvenile density (stems/ha)") +
+  theme(text = element_text(size=16),
+        axis.text.x = element_text(color="black", size=16),
+        axis.text.y = element_text(color="black", size=16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) 
+dev.off()
+
+currentDate <- Sys.Date()
+ggsave(paste0("tpha_vs_seed_dist_spp_",currentDate,".png"), width = 7, height = 5)
+
+```
+
+          
